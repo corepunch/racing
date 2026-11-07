@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		10B1FC7BDD9747974A412DFE /* CarStyle.swift in Sources */ = {isa = PBXBuildFile; fileRef = EBD5324DC0CD02A58244E5BD /* CarStyle.swift */; };
 		232CEB78810D1D4EC723B85A /* CarNode.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8ECB0436D01110ADD67781A0 /* CarNode.swift */; };
 		41A2154F27E5F3683316EEDE /* InputManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C8D312FD438ABF11F3EFB90E /* InputManager.swift */; };
 		4C25FC423878CD8055CB687A /* GameScene.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2976270C4AEB0FD48286BA9A /* GameScene.swift */; };
@@ -30,6 +31,7 @@
 		C86F141A7D1281F5BF81331B /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		C8D312FD438ABF11F3EFB90E /* InputManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InputManager.swift; sourceTree = "<group>"; };
 		D312865C8BE750AD405ABE14 /* TrackPath.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrackPath.swift; sourceTree = "<group>"; };
+		EBD5324DC0CD02A58244E5BD /* CarStyle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CarStyle.swift; sourceTree = "<group>"; };
 		FD514F5133FA23A399232CF2 /* PhysicsCategory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhysicsCategory.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -103,6 +105,7 @@
 			children = (
 				1C949E642EE83538E4C17BB2 /* CarController.swift */,
 				8ECB0436D01110ADD67781A0 /* CarNode.swift */,
+				EBD5324DC0CD02A58244E5BD /* CarStyle.swift */,
 			);
 			path = Car;
 			sourceTree = "<group>";
@@ -123,6 +126,7 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = 8722240803B8A11411B7A33E /* Build configuration list for PBXNativeTarget "Racing" */;
 			buildPhases = (
+				412F29E11D089FDA8FB22F80 /* Copy Resources */,
 				AC09EC5C2D9BA5F2EF4DD6C5 /* Sources */,
 			);
 			buildRules = (
@@ -166,6 +170,31 @@
 		};
 /* End PBXProject section */
 
+/* Begin PBXShellScriptBuildPhase section */
+		412F29E11D089FDA8FB22F80 /* Copy Resources */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Copy Resources";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(BUILT_PRODUCTS_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Decorations",
+				"$(BUILT_PRODUCTS_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Cars",
+				"$(BUILT_PRODUCTS_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Audio",
+				"$(BUILT_PRODUCTS_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Props",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -e\ncopy_folder() {\n  local src=\"$SRCROOT/Resources/$1\"\n  local dst=\"$BUILT_PRODUCTS_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/$1\"\n  mkdir -p \"$dst\"\n  rsync -a --delete \"$src/\" \"$dst/\"\n}\ncopy_folder \"Decorations\"\ncopy_folder \"Cars\"\ncopy_folder \"Audio\"\ncopy_folder \"Props\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
+
 /* Begin PBXSourcesBuildPhase section */
 		AC09EC5C2D9BA5F2EF4DD6C5 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
@@ -174,6 +203,7 @@
 				C40C309CAD78D454D042F9D1 /* AppDelegate.swift in Sources */,
 				949386C6A8FAC8641222F200 /* CarController.swift in Sources */,
 				232CEB78810D1D4EC723B85A /* CarNode.swift in Sources */,
+				10B1FC7BDD9747974A412DFE /* CarStyle.swift in Sources */,
 				4C25FC423878CD8055CB687A /* GameScene.swift in Sources */,
 				D0CC42B797B2D40A805122E1 /* GameViewController.swift in Sources */,
 				F353C12D8AAFAB8BE8A7890F /* HUDScene.swift in Sources */,
@@ -257,7 +287,9 @@
 					"@executable_path/Frameworks",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.racing.app;
+				"PRODUCT_BUNDLE_IDENTIFIER[sdk=macosx*]" = com.racing.app.desktop;
 				SDKROOT = iphoneos;
+				SUPPORTS_MACCATALYST = YES;
 				SWIFT_VERSION = 5.9;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
@@ -275,7 +307,9 @@
 					"@executable_path/Frameworks",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.racing.app;
+				"PRODUCT_BUNDLE_IDENTIFIER[sdk=macosx*]" = com.racing.app.desktop;
 				SDKROOT = iphoneos;
+				SUPPORTS_MACCATALYST = YES;
 				SWIFT_VERSION = 5.9;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};

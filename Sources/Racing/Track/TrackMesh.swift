@@ -147,110 +147,105 @@ final class TrackMeshBuilder {
     }
 }
 
-// MARK: - Track decorations (buildings, lamp posts)
+// MARK: - Track decorations — all Kenney assets, no procedural geometry
 
 final class TrackDecorations {
+
+    private static var templates: [String: SCNNode] = [:]
+
+    // Loads from Props/ (OBJ) first, then Decorations/ (USDZ) as fallback.
+    private static func loadTemplate(_ name: String, scale: Float = 1) -> SCNNode? {
+        let key = "\(name)@\(scale)"
+        if let t = templates[key] { return t }
+
+        let url: URL?
+        if let u = Bundle.main.url(forResource: name, withExtension: "obj",
+                                    subdirectory: "Props") {
+            url = u
+        } else if let u = Bundle.main.url(forResource: name, withExtension: "usdz",
+                                           subdirectory: "Decorations") {
+            url = u
+        } else {
+            return nil
+        }
+        guard let u = url, let scene = try? SCNScene(url: u, options: nil) else { return nil }
+        let root = scene.rootNode
+        if scale != 1 { root.simdScale = SIMD3<Float>(repeating: scale) }
+        templates[key] = root
+        return root
+    }
+
+    // MARK: - Public entry point
 
     static func addDecorations(to parentNode: SCNNode, path: TrackPath) {
         let samples = path.samples
         let count   = samples.count
-        // Place a building cluster every ~15 samples on the outer edge
-        let step = 15
-        var idx = 0
-        while idx < count {
-            let s = samples[idx]
-            addBuildingCluster(parent: parentNode, sample: s, side: (idx / step) % 2 == 0 ? 1 : -1)
-            idx += step
+
+        // Start/finish gantry at sample 0
+        placeAlongTrack("overhead", scale: 11, parent: parentNode,
+                        sample: samples[0], sideOffset: 0, facingForward: true)
+        // Checkered flags flanking start
+        placeAlongTrack("flagCheckers", scale: 7, parent: parentNode,
+                        sample: samples[0], sideOffset:  7)
+        placeAlongTrack("flagCheckers", scale: 7, parent: parentNode,
+                        sample: samples[0], sideOffset: -7)
+
+        // Barriers along kerb edges every 4 samples (barrierRed is 0.12 m at scale 7 → ~0.84 m/instance)
+        for i in stride(from: 0, to: count, by: 4) {
+            let s = samples[i]
+            placeAlongTrack("barrierRed", scale: 7, parent: parentNode,
+                            sample: s, sideOffset:  s.halfWidth + 2.5, facingForward: true)
+            placeAlongTrack("barrierRed", scale: 7, parent: parentNode,
+                            sample: s, sideOffset: -(s.halfWidth + 2.5), facingForward: true)
         }
 
-        // Lamp posts every ~10 samples on both sides
+        // Kenney lightPostLarge every 10 samples (0.796 m tall × 8 = 6.4 m)
         for i in stride(from: 0, to: count, by: 10) {
-            addLampPost(parent: parentNode, sample: samples[i], side:  1)
-            addLampPost(parent: parentNode, sample: samples[i], side: -1)
+            let s = samples[i]
+            placeAlongTrack("lightPostLarge", scale: 8, parent: parentNode,
+                            sample: s, sideOffset:  s.halfWidth + 1.5)
+            placeAlongTrack("lightPostLarge", scale: 8, parent: parentNode,
+                            sample: s, sideOffset: -(s.halfWidth + 1.5))
+        }
+
+        // Grandstands every 40 samples; trees fill alternate gaps — start at 20 to clear the start box
+        for i in stride(from: 20, to: count, by: 20) {
+            let s    = samples[i]
+            let slot = (i - 20) / 20
+            if slot % 3 == 2 {
+                // tree cluster
+                placeInward("treeLarge", scale: 5, parent: parentNode, sample: s, sideOffset:  21)
+                placeInward("treeLarge", scale: 5, parent: parentNode, sample: s, sideOffset: -21)
+            } else {
+                // grandstand
+                placeInward("grandStandCovered", scale: 6, parent: parentNode, sample: s, sideOffset:  24)
+                placeInward("grandStandCovered", scale: 6, parent: parentNode, sample: s, sideOffset: -24)
+            }
         }
     }
 
-    // MARK: Buildings
+    // MARK: - Placement helpers
 
-    private static func addBuildingCluster(parent: SCNNode, sample: PathSample, side: Float) {
-        let count = Int.random(in: 2...5)
-        for k in 0..<count {
-            let w      = Float.random(in: 6...14)
-            let d      = Float.random(in: 6...14)
-            let h      = Float.random(in: 8...28)
-            let offsetR = side * (22 + Float(k) * (w + 2) + Float.random(in: 0...3))
-            let offsetF = Float.random(in: -4...4)
-            let centre = sample.position + sample.right * offsetR + sample.forward * offsetF
-                       + SIMD3<Float>(0, h * 0.5, 0)
-
-            let box      = SCNBox(width: CGFloat(w), height: CGFloat(h), length: CGFloat(d), chamferRadius: 0.3)
-            box.firstMaterial           = buildingMaterial()
-            let node                    = SCNNode(geometry: box)
-            node.position               = SCNVector3(centre.x, centre.y, centre.z)
-            node.eulerAngles.y          = Float.random(in: -0.3...0.3)
-            parent.addChildNode(node)
-        }
+    // Places a prop aligned with the track forward direction (barriers, lamp posts, gantries).
+    private static func placeAlongTrack(_ name: String, scale: Float, parent: SCNNode,
+                                         sample: PathSample, sideOffset: Float,
+                                         facingForward: Bool = false) {
+        guard let tmpl = loadTemplate(name, scale: scale) else { return }
+        let node = tmpl.clone()
+        node.simdPosition = sample.position + sample.right * sideOffset
+        let angle = atan2(sample.forward.x, -sample.forward.z)
+        node.simdEulerAngles = SIMD3<Float>(0, facingForward ? angle : angle + .pi / 2, 0)
+        parent.addChildNode(node)
     }
 
-    private static func buildingMaterial() -> SCNMaterial {
-        let mat = SCNMaterial()
-        // Random muted building colour
-        let grey = CGFloat.random(in: 0.35...0.65)
-        mat.diffuse.contents = UIColor(
-            red: grey + CGFloat.random(in: -0.05...0.05),
-            green: grey + CGFloat.random(in: -0.05...0.05),
-            blue: grey + CGFloat.random(in: -0.05...0.05),
-            alpha: 1
-        )
-        mat.roughness.contents = 0.85
-        return mat
-    }
-
-    // MARK: Lamp posts
-
-    private static func addLampPost(parent: SCNNode, sample: PathSample, side: Float) {
-        let poleR: CGFloat = 0.08, poleH: CGFloat = 6
-        let armL: CGFloat = 1.2
-
-        let pole       = SCNCylinder(radius: poleR, height: poleH)
-        pole.firstMaterial           = poleMaterial()
-        let poleNode                 = SCNNode(geometry: pole)
-
-        let offsetR    = side * (sample.halfWidth + 1.2)
-        let base       = sample.position + sample.right * offsetR + SIMD3<Float>(0, Float(poleH * 0.5), 0)
-        poleNode.position            = SCNVector3(base.x, base.y, base.z)
-
-        // Horizontal arm
-        let arm        = SCNCylinder(radius: 0.04, height: armL)
-        arm.firstMaterial            = poleMaterial()
-        let armNode                  = SCNNode(geometry: arm)
-        armNode.eulerAngles.z        = .pi * 0.5
-        armNode.position             = SCNVector3(0, Float(poleH * 0.5) - 0.1, 0)
-        poleNode.addChildNode(armNode)
-
-        // Lamp head
-        let lamp       = SCNSphere(radius: 0.25)
-        lamp.firstMaterial           = lampMaterial()
-        let lampNode                 = SCNNode(geometry: lamp)
-        lampNode.position            = SCNVector3(Float(armL * 0.5) * side, 0, 0)
-        armNode.addChildNode(lampNode)
-
-        parent.addChildNode(poleNode)
-    }
-
-    private static func poleMaterial() -> SCNMaterial {
-        let m = SCNMaterial()
-        m.diffuse.contents = UIColor(white: 0.55, alpha: 1)
-        m.metalness.contents = 0.6
-        m.roughness.contents = 0.4
-        return m
-    }
-
-    private static func lampMaterial() -> SCNMaterial {
-        let m = SCNMaterial()
-        m.diffuse.contents    = UIColor(red: 1, green: 0.95, blue: 0.7, alpha: 1)
-        m.emission.contents   = UIColor(red: 1, green: 0.95, blue: 0.7, alpha: 1)
-        m.roughness.contents  = 0.1
-        return m
+    // Places a prop facing inward toward the track (grandstands, trees).
+    private static func placeInward(_ name: String, scale: Float, parent: SCNNode,
+                                     sample: PathSample, sideOffset: Float) {
+        guard let tmpl = loadTemplate(name, scale: scale) else { return }
+        let node = tmpl.clone()
+        node.simdPosition = sample.position + sample.right * sideOffset
+        let inward = sideOffset > 0 ? -sample.right : sample.right
+        node.simdEulerAngles = SIMD3<Float>(0, atan2(inward.x, inward.z), 0)
+        parent.addChildNode(node)
     }
 }

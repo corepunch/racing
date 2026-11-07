@@ -57,16 +57,14 @@ final class CarNode: SCNNode {
                                         subdirectory: "Cars") else {
             return nil
         }
-        guard let scene = try? SCNScene(url: url, options: nil) else { return nil }
+        guard let scene = try? SCNScene(url: url, options: [.convertToYUp: true]) else { return nil }
 
         let wrapper = SCNNode()
-        for child in scene.rootNode.childNodes {
-            wrapper.addChildNode(child)
-        }
+        wrapper.addChildNode(scene.rootNode)
         wrapper.eulerAngles = SCNVector3(0, style.modelYRotation, 0)
         let s = style.modelScale
         wrapper.scale       = SCNVector3(s, s, s)
-        wrapper.position    = SCNVector3(0, style.modelYOffset, 0)
+        wrapper.position    = SCNVector3(0, -0.4 - Float(wrapper.boundingBox.min.y) * s, 0)
 
         let wn = style.wheelNodes
         let fl = wrapper.childNode(withName: wn.frontLeft  ?? "", recursively: true) ?? Self.makeWheel()

@@ -117,7 +117,7 @@ final class CarController {
         // Cosmetic weight-transfer tilt
         let pitch = -lvFwd / 220.0
         let roll  = -yawRate * 0.075
-        node.simdEulerAngles = SIMD3<Float>(pitch, heading, roll)
+        node.simdEulerAngles = SIMD3<Float>(pitch, -heading, roll)
     }
 
     // Resets the car to a track start position and orientation

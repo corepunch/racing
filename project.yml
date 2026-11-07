@@ -17,11 +17,30 @@ targets:
       - path: Sources/Racing
         excludes:
           - "**/.DS_Store"
-    resources:
-      - Resources
+    preBuildScripts:
+      - name: Copy Resources
+        script: |
+          set -e
+          copy_folder() {
+            local src="$SRCROOT/Resources/$1"
+            local dst="$BUILT_PRODUCTS_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/$1"
+            mkdir -p "$dst"
+            rsync -a --delete "$src/" "$dst/"
+          }
+          copy_folder "Decorations"
+          copy_folder "Cars"
+          copy_folder "Audio"
+          copy_folder "Props"
+        outputFiles:
+          - "$(BUILT_PRODUCTS_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Decorations"
+          - "$(BUILT_PRODUCTS_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Cars"
+          - "$(BUILT_PRODUCTS_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Audio"
+          - "$(BUILT_PRODUCTS_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Props"
     settings:
       INFOPLIST_FILE: Resources/Info.plist
       PRODUCT_BUNDLE_IDENTIFIER: com.racing.app
+      PRODUCT_BUNDLE_IDENTIFIER[sdk=macosx*]: com.racing.app.desktop
       TARGETED_DEVICE_FAMILY: "1,2"
+      SUPPORTS_MACCATALYST: "YES"
       SWIFT_VERSION: "5.9"
       ENABLE_PREVIEWS: "YES"

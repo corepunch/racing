@@ -249,7 +249,7 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
         let heading = atan2(fwd.x, -fwd.z)
 
         carNode.simdPosition = pos
-        carNode.simdEulerAngles = SIMD3<Float>(0, heading, 0)
+        carNode.simdEulerAngles = SIMD3<Float>(0, -heading, 0)
         carNode.animateWheels(speed: speed, steer: 0, dt: dt)
 
         physics.position = pos
@@ -273,9 +273,9 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
         let h   = physics.heading
         let fwd = SIMD3<Float>(sin(h), 0, -cos(h))
 
-        // Target position: behind and above car
-        let behind: Float = 9.5
-        let above:  Float = 3.8
+        // CTR-style: farther back, higher, looking well ahead
+        let behind: Float = 16.0
+        let above:  Float = 7.5
         let targetPos = physics.position - fwd * behind + SIMD3<Float>(0, above, 0)
 
         // Spring follow (smoothing proportional to frame time)
@@ -286,12 +286,12 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
         let next  = cur + (targetPos - cur) * alpha
         cameraNode.simdPosition = next
 
-        // Look ahead of car
-        let lookAt = physics.position + fwd * 10 + SIMD3<Float>(0, 0.6, 0)
+        // Look ahead of car (more forward offset gives road-preview feel)
+        let lookAt = physics.position + fwd * 14 + SIMD3<Float>(0, 0.6, 0)
         cameraNode.simdLook(at: lookAt, up: SIMD3<Float>(0, 1, 0), localFront: SIMD3<Float>(0, 0, -1))
 
         // Slight FOV boost at speed (Sega Rally "rushing" feel)
-        camera.fieldOfView = CGFloat(62 + physics.speed * 0.14)
+        camera.fieldOfView = CGFloat(68 + physics.speed * 0.14)
     }
 
     // MARK: - Lap detection
