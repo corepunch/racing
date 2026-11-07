@@ -173,6 +173,7 @@
 /* Begin PBXShellScriptBuildPhase section */
 		412F29E11D089FDA8FB22F80 /* Copy Resources */ = {
 			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
 			buildActionMask = 2147483647;
 			files = (
 			);
@@ -188,10 +189,12 @@
 				"$(BUILT_PRODUCTS_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Cars",
 				"$(BUILT_PRODUCTS_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Audio",
 				"$(BUILT_PRODUCTS_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Props",
+				"$(BUILT_PRODUCTS_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Environment",
+				"$(BUILT_PRODUCTS_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Textures",
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "set -e\ncopy_folder() {\n  local src=\"$SRCROOT/Resources/$1\"\n  local dst=\"$BUILT_PRODUCTS_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/$1\"\n  mkdir -p \"$dst\"\n  rsync -a --delete \"$src/\" \"$dst/\"\n}\ncopy_folder \"Decorations\"\ncopy_folder \"Cars\"\ncopy_folder \"Audio\"\ncopy_folder \"Props\"\n";
+			shellScript = "set -e\ncopy_folder() {\n  local src=\"$SRCROOT/Resources/$1\"\n  local dst=\"$BUILT_PRODUCTS_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/$1\"\n  mkdir -p \"$dst\"\n  rsync -a --delete \"$src/\" \"$dst/\"\n}\ncopy_folder \"Decorations\"\ncopy_folder \"Cars\"\ncopy_folder \"Audio\"\ncopy_folder \"Props\"\ncopy_folder \"Environment\"\ncopy_folder \"Textures\"\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 

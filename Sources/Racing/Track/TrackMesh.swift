@@ -67,18 +67,22 @@ final class TrackMeshBuilder {
         var normals    = [SCNVector3]()
         var texcoords  = [CGPoint]()
 
-        positions.reserveCapacity(n * p)
-        normals.reserveCapacity(n * p)
-        texcoords.reserveCapacity(n * p)
+        positions.reserveCapacity((n + 1) * p)
+        normals.reserveCapacity((n + 1) * p)
+        texcoords.reserveCapacity((n + 1) * p)
 
-        for s in samples {
-            let v = CGFloat(s.arcLength / 8.0)
+        let textureRepeats = max(1, (path.totalLength / 12).rounded())
+        let tileSize = path.totalLength / textureRepeats
+        for sampleIndex in 0...n {
+            let s = samples[sampleIndex % n]
+            let distance = sampleIndex == n ? path.totalLength : s.arcLength
+            let v = CGFloat(distance / tileSize)
             for prof in profile {
                 let offset = s.right * prof.x + s.up * prof.y
                 let pos    = s.position + offset
                 positions.append(SCNVector3(pos.x, pos.y, pos.z))
                 normals.append(SCNVector3(s.up.x, s.up.y, s.up.z))
-                texcoords.append(CGPoint(x: CGFloat(prof.x / 16.0 + 0.5), y: v))
+                texcoords.append(CGPoint(x: CGFloat(prof.x / 11 + 0.5), y: v))
             }
         }
 
@@ -87,14 +91,14 @@ final class TrackMeshBuilder {
         var slotIndices: [[Int32]] = Array(repeating: [], count: slotCount)
 
         for si in 0..<n {
-            let ni = (si + 1) % n
+            let ni = si + 1
             for pi in 0..<(p - 1) {
                 let a = Int32(si * p + pi)
                 let b = Int32(si * p + pi + 1)
                 let c = Int32(ni * p + pi)
                 let d = Int32(ni * p + pi + 1)
                 let slot = slotForStrip(pi)
-                slotIndices[slot].append(contentsOf: [a, c, b, b, c, d])
+                slotIndices[slot].append(contentsOf: [a, b, c, b, d, c])
             }
         }
 
@@ -124,9 +128,24 @@ final class TrackMeshBuilder {
 
     private static func makeMaterials() -> [SCNMaterial] {
         let asphalt = SCNMaterial()
+        asphalt.name = "Arcade racing road"
+        asphalt.lightingModel = .physicallyBased
         asphalt.diffuse.contents   = UIColor(white: 0.22, alpha: 1)
-        asphalt.roughness.contents = 0.85
+        asphalt.roughness.contents = 0.95
+        asphalt.metalness.contents = 0
         asphalt.isDoubleSided      = true
+        if let url = Bundle.main.url(forResource: "racing-road", withExtension: "png",
+                                     subdirectory: "Textures") {
+            asphalt.diffuse.contents = url
+        } else {
+            assertionFailure("Missing bundled racing road texture")
+        }
+        asphalt.diffuse.wrapS = .clamp
+        asphalt.diffuse.wrapT = .repeat
+        asphalt.diffuse.minificationFilter = .linear
+        asphalt.diffuse.magnificationFilter = .linear
+        asphalt.diffuse.mipFilter = .linear
+        asphalt.diffuse.maxAnisotropy = 16
 
         let kerb = SCNMaterial()
         kerb.diffuse.contents      = UIColor(red: 0.85, green: 0.15, blue: 0.15, alpha: 1)
@@ -168,8 +187,24 @@ final class TrackDecorations {
         } else {
             return nil
         }
-        guard let u = url, let scene = try? SCNScene(url: u, options: nil) else { return nil }
-        let root = scene.rootNode
+        guard let u = url,
+              let scene = try? SCNScene(url: u, options: [.convertToYUp: true]) else { return nil }
+        let axes = SCNNode()
+        axes.addChildNode(scene.rootNode)
+        if name == "barrierRed" || name == "barrierWall" || name == "fenceStraight" {
+            axes.simdEulerAngles.y = .pi / 2
+        }
+        let content = SCNNode()
+        content.addChildNode(axes)
+        let bounds = content.boundingBox
+        content.simdPosition = -SIMD3<Float>(
+            Float(bounds.min.x + bounds.max.x) * 0.5,
+            Float(bounds.min.y),
+            Float(bounds.min.z + bounds.max.z) * 0.5
+        )
+        let root = SCNNode()
+        root.name = name
+        root.addChildNode(content)
         if scale != 1 { root.simdScale = SIMD3<Float>(repeating: scale) }
         templates[key] = root
         return root
@@ -183,28 +218,28 @@ final class TrackDecorations {
 
         // Start/finish gantry at sample 0
         placeAlongTrack("overhead", scale: 11, parent: parentNode,
-                        sample: samples[0], sideOffset: 0, facingForward: true)
+                        sample: samples[0], sideOffset: 0)
         // Checkered flags flanking start
         placeAlongTrack("flagCheckers", scale: 7, parent: parentNode,
                         sample: samples[0], sideOffset:  7)
         placeAlongTrack("flagCheckers", scale: 7, parent: parentNode,
                         sample: samples[0], sideOffset: -7)
 
-        // Barriers along kerb edges every 4 samples (barrierRed is 0.12 m at scale 7 → ~0.84 m/instance)
+        // Barriers along kerb edges every 4 samples.
         for i in stride(from: 0, to: count, by: 4) {
             let s = samples[i]
             placeAlongTrack("barrierRed", scale: 7, parent: parentNode,
-                            sample: s, sideOffset:  s.halfWidth + 2.5, facingForward: true)
+                            sample: s, sideOffset:  s.halfWidth + 2.5)
             placeAlongTrack("barrierRed", scale: 7, parent: parentNode,
-                            sample: s, sideOffset: -(s.halfWidth + 2.5), facingForward: true)
+                            sample: s, sideOffset: -(s.halfWidth + 2.5))
         }
 
         // Kenney lightPostLarge every 10 samples (0.796 m tall × 8 = 6.4 m)
         for i in stride(from: 0, to: count, by: 10) {
             let s = samples[i]
-            placeAlongTrack("lightPostLarge", scale: 8, parent: parentNode,
+            placeInward("lightPostLarge", scale: 8, parent: parentNode,
                             sample: s, sideOffset:  s.halfWidth + 1.5)
-            placeAlongTrack("lightPostLarge", scale: 8, parent: parentNode,
+            placeInward("lightPostLarge", scale: 8, parent: parentNode,
                             sample: s, sideOffset: -(s.halfWidth + 1.5))
         }
 
@@ -226,26 +261,26 @@ final class TrackDecorations {
 
     // MARK: - Placement helpers
 
-    // Places a prop aligned with the track forward direction (barriers, lamp posts, gantries).
+    // Places a prop aligned with the track forward direction (barriers, flags, gantries).
     private static func placeAlongTrack(_ name: String, scale: Float, parent: SCNNode,
-                                         sample: PathSample, sideOffset: Float,
-                                         facingForward: Bool = false) {
-        guard let tmpl = loadTemplate(name, scale: scale) else { return }
-        let node = tmpl.clone()
-        node.simdPosition = sample.position + sample.right * sideOffset
-        let angle = atan2(sample.forward.x, -sample.forward.z)
-        node.simdEulerAngles = SIMD3<Float>(0, facingForward ? angle : angle + .pi / 2, 0)
-        parent.addChildNode(node)
+                                 sample: PathSample, sideOffset: Float) {
+          place(name, scale: scale, parent: parent, sample: sample,
+              sideOffset: sideOffset, forward: sample.forward)
     }
 
     // Places a prop facing inward toward the track (grandstands, trees).
     private static func placeInward(_ name: String, scale: Float, parent: SCNNode,
                                      sample: PathSample, sideOffset: Float) {
+        place(name, scale: scale, parent: parent, sample: sample,
+              sideOffset: sideOffset, forward: sideOffset > 0 ? -sample.right : sample.right)
+    }
+
+    private static func place(_ name: String, scale: Float, parent: SCNNode,
+                              sample: PathSample, sideOffset: Float, forward: SIMD3<Float>) {
         guard let tmpl = loadTemplate(name, scale: scale) else { return }
         let node = tmpl.clone()
         node.simdPosition = sample.position + sample.right * sideOffset
-        let inward = sideOffset > 0 ? -sample.right : sample.right
-        node.simdEulerAngles = SIMD3<Float>(0, atan2(inward.x, inward.z), 0)
+        node.simdEulerAngles = SIMD3<Float>(0, atan2(-forward.x, -forward.z), 0)
         parent.addChildNode(node)
     }
 }

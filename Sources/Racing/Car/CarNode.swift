@@ -251,15 +251,15 @@ final class CarNode: SCNNode {
         // X gives correct forward-roll for both Kenney and OGA meshes.
         let rotPerSec: Float = -speed / (2 * Float.pi * 0.33)
         for w in uniqueWheelNodes {
-            w.eulerAngles.x += rotPerSec * dt
+            w.simdEulerAngles.x += rotPerSec * dt
         }
 
         // Steering — apply only to front wheels
         let steerAngle: Float = steer * 0.42
-        leftFrontWheel.eulerAngles.y  = steerAngle
+        leftFrontWheel.simdEulerAngles.y  = steerAngle
         // avoid double-applying when both sides share the same node
         if rightFrontWheel !== leftFrontWheel {
-            rightFrontWheel.eulerAngles.y = steerAngle
+            rightFrontWheel.simdEulerAngles.y = steerAngle
         }
     }
 

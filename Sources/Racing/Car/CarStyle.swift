@@ -143,12 +143,12 @@ enum CarStyle: String, CaseIterable {
 
     // MARK: - Visual scale & orientation
 
-    /// Scale to apply to the loaded model so it matches the physics car proportions.
-    /// Kenney trucks span ~1.5 m; OGA cars vary. Scale them to ~3.6 m length.
+    /// Scale to apply to the loaded model.
+    /// Kenney trucks are 1.5 m wide and 2.9 m long natively; use 2.1 m width in game.
     var modelScale: Float {
         switch self {
         case .truckGreen, .truckPurple, .truckRed, .truckYellow:
-            return 2.4
+            return 1.4
         case .motorcycle:
             return 2.0
         case .ogaBasicCar, .ogaCopCar, .ogaRaceCar,
@@ -176,7 +176,7 @@ enum CarStyle: String, CaseIterable {
     var modelYOffset: Float {
         switch self {
         case .truckGreen, .truckPurple, .truckRed, .truckYellow:
-            return -0.3 * 2.4   // wheel centre at Y≈0.3 × scale
+            return -0.3 * modelScale   // wheel centre at Y≈0.3 × scale
         case .motorcycle:
             return -0.3 * 2.0
         default:

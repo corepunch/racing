@@ -60,10 +60,20 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
     // MARK: - Scene setup
 
     private func buildScene() {
-        scene.background.contents   = UIColor(red: 0.56, green: 0.80, blue: 0.95, alpha: 1)
-        scene.fogStartDistance      = 320
-        scene.fogEndDistance        = 520
-        scene.fogColor              = UIColor(red: 0.70, green: 0.85, blue: 0.95, alpha: 1)
+        scene.background.contents = UIColor(red: 0.58, green: 0.66, blue: 0.68, alpha: 1)
+        if let skyURL = Bundle.main.url(forResource: "overcast_soil_puresky_2k",
+                                        withExtension: "png", subdirectory: "Environment") {
+            scene.background.contents = skyURL
+            scene.background.intensity = 1
+            scene.lightingEnvironment.contents = skyURL
+            scene.lightingEnvironment.intensity = 0.65
+        } else {
+            assertionFailure("Missing bundled overcast LDR environment")
+        }
+        scene.fogStartDistance = 70
+        scene.fogEndDistance = 460
+        scene.fogDensityExponent = 1.25
+        scene.fogColor = UIColor(red: 0.65, green: 0.72, blue: 0.73, alpha: 1)
 
         addLighting()
 
@@ -96,11 +106,18 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
         // Sun
         let sunLight         = SCNLight()
         sunLight.type        = .directional
-        sunLight.color       = UIColor(red: 1.0, green: 0.96, blue: 0.84, alpha: 1)
-        sunLight.intensity   = 1_200
+        sunLight.color       = UIColor(red: 0.86, green: 0.91, blue: 0.94, alpha: 1)
+        sunLight.intensity   = 800
         sunLight.castsShadow = true
-        sunLight.shadowMode  = .deferred
-        sunLight.shadowSampleCount = 4
+        sunLight.shadowMode  = .forward
+        sunLight.shadowSampleCount = 1
+        sunLight.shadowRadius = 0
+        sunLight.shadowMapSize = CGSize(width: 2048, height: 2048)
+        sunLight.shadowCascadeCount = 4
+        sunLight.shadowCascadeSplittingFactor = 0.8
+        sunLight.automaticallyAdjustsShadowProjection = true
+        sunLight.maximumShadowDistance = 200
+        sunLight.shadowColor = UIColor(white: 0, alpha: 0.45)
         let sunNode          = SCNNode()
         sunNode.light        = sunLight
         sunNode.eulerAngles  = SCNVector3(-Float.pi / 4.5, Float.pi / 6, 0)
@@ -109,7 +126,7 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
         // Sky fill
         let ambLight         = SCNLight()
         ambLight.type        = .ambient
-        ambLight.color       = UIColor(red: 0.60, green: 0.70, blue: 0.90, alpha: 1)
+        ambLight.color       = UIColor(red: 0.67, green: 0.76, blue: 0.78, alpha: 1)
         ambLight.intensity   = 400
         let ambNode          = SCNNode()
         ambNode.light        = ambLight
@@ -120,7 +137,7 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
         let floor            = SCNFloor()
         floor.reflectivity   = 0
         let mat              = SCNMaterial()
-        mat.diffuse.contents = UIColor(red: 0.25, green: 0.42, blue: 0.18, alpha: 1)
+        mat.diffuse.contents = UIColor(red: 0.28, green: 0.39, blue: 0.33, alpha: 1)
         mat.roughness.contents = 1.0
         floor.firstMaterial  = mat
         let node             = SCNNode(geometry: floor)
@@ -167,6 +184,10 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
         camera.fieldOfView   = 65
         camera.zFar          = 600
         camera.zNear         = 0.5
+        camera.wantsHDR = false
+        camera.wantsExposureAdaptation = false
+        camera.motionBlurIntensity = 0
+        camera.bloomIntensity = 0
 
         cameraNode           = SCNNode()
         cameraNode.camera    = camera
