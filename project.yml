@@ -1,0 +1,27 @@
+name: Racing
+options:
+  bundleIdPrefix: com.racing
+  deploymentTarget:
+    iOS: "16.0"
+  defaultConfig: Debug
+
+settings:
+  SUPPORTED_INTERFACE_ORIENTATIONS: UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight
+  SUPPORTED_INTERFACE_ORIENTATIONS_IPAD: UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight
+
+targets:
+  Racing:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources/Racing
+        excludes:
+          - "**/.DS_Store"
+    resources:
+      - Resources
+    settings:
+      INFOPLIST_FILE: Resources/Info.plist
+      PRODUCT_BUNDLE_IDENTIFIER: com.racing.app
+      TARGETED_DEVICE_FAMILY: "1,2"
+      SWIFT_VERSION: "5.9"
+      ENABLE_PREVIEWS: "YES"
