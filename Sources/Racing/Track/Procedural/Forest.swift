@@ -9,6 +9,7 @@ struct TreeSpriteManifest: Decodable {
         var uv: [Float]          // x, y, w, h normalised, origin top-left
         var height: Float
         var aspect: Float
+        var category: String?
     }
     struct Wall: Decodable {
         var file: String
@@ -39,7 +40,7 @@ enum ForestBuilder {
     /// Cut-out foliage; billboards additionally turn about Y to face the active camera (or light, in shadow passes).
     private static func material(_ image: UIImage, billboard: Bool) -> SCNMaterial {
         let m = SCNMaterial()
-        m.lightingModel = .lambert
+        m.lightingModel = billboard ? .constant : .lambert
         m.diffuse.contents = image
         m.diffuse.mipFilter = .linear
         m.diffuse.wrapS = billboard ? .clamp : .repeat
@@ -77,16 +78,20 @@ enum ForestBuilder {
         }
         let env = field.env
         let biome = env.forest.rawValue
-        let sprites = manifest.sprites.filter { $0.biomes.contains(biome) }
+        let sprites = manifest.sprites.filter { $0.biomes.contains(biome) && $0.category != "people" }
         guard !sprites.isEmpty else { return root }
         let noise = Noise2D(seed: env.seed &+ 405)
 
-        if let wall = manifest.walls[biome], let image = TreeSpriteManifest.image(wall.file) {
+        if env.forest != .arid, let wall = manifest.walls[biome], let image = TreeSpriteManifest.image(wall.file) {
             root.addChildNode(forestWalls(field: field, wall: wall, material: material(image, billboard: false),
                                           noise: noise))
         }
         root.addChildNode(scatter(field: field, sprites: sprites, material: material(atlas, billboard: true),
                                   noise: noise))
+        let people = manifest.sprites.filter { $0.category == "people" && $0.biomes.contains(biome) }
+        if !people.isEmpty {
+            root.addChildNode(spectators(field: field, sprites: people, material: material(atlas, billboard: true)))
+        }
         return root
     }
 
@@ -173,7 +178,7 @@ enum ForestBuilder {
                 let sprite = sprites[Int(rng.next() % UInt64(sprites.count))]
                 let h = sprite.height * rng.float(0.8...1.25)
                 let w = h * sprite.aspect
-                let base = SIMD3(px, info.height - 0.3, pz)
+                let base = SIMD3(px, info.height - min(0.3, h * 0.04), pz)
                 let (u0, v0) = (sprite.uv[0], sprite.uv[1])
                 let (u1, v1) = (u0 + sprite.uv[2], v0 + sprite.uv[3])
                 // Mirror half the trees for extra variety.
@@ -204,5 +209,55 @@ enum ForestBuilder {
             root.addChildNode(SCNNode(geometry: geo))
         }
         return root
+    }
+
+    private static func spectators(field: TerrainField, sprites: [TreeSpriteManifest.Sprite],
+                                   material: SCNMaterial) -> SCNNode {
+        var rng = SplitMix64(seed: field.env.seed &+ 910)
+        var mesh = MeshBuilder(materialCount: 1, secondUV: true)
+        let path = field.path
+        let water = field.env.waterLevel ?? -.greatestFiniteMagnitude
+        let up = SIMD3<Float>(0, 1, 0)
+        for index in stride(from: 0, to: path.stepCount, by: 8) {
+            let sample = path.sample(at: index)
+            if sample.tunnelInfluence > 0.05 { continue }
+            let atStart = min(sample.arcLength, path.totalLength - sample.arcLength) < 65
+            let inTown = sample.townInfluence > 0.8
+            if !atStart && !inTown && rng.float() > 0.07 { continue }
+            let right = simd_normalize(SIMD3(sample.right.x, 0, sample.right.z))
+            let forward = simd_normalize(SIMD3(sample.forward.x, 0, sample.forward.z))
+            for side: Float in [-1, 1] {
+                if !atStart && rng.float() > 0.65 { continue }
+                let count = atStart ? 5 : Int(rng.next() % 3) + 2
+                for person in 0..<count {
+                    let offset = Float(person) * 1.0 - Float(count - 1) * 0.5
+                    let distance = inTown ? rng.float(10.3...11.8) : rng.float(11.5...13.0)
+                    let position = sample.position + right * side * distance
+                        + forward * (offset + rng.float(-0.15...0.15))
+                    let info = field.info(position.x, position.z)
+                    if info.hit.distance < sample.halfWidth + 4.2 || info.height < water + 0.6 { continue }
+                    if abs(info.height - field.height(position.x + 0.6, position.z + 0.6)) > 0.4 { continue }
+                    if path.samples[info.hit.index].tunnelInfluence > 0.05 { continue }
+                    let sprite = sprites[Int(rng.next() % UInt64(sprites.count))]
+                    let height = sprite.height * rng.float(0.94...1.06)
+                    let width = height * sprite.aspect
+                    let base = SIMD3(position.x, info.height, position.z)
+                    let left = sprite.uv[0], top = sprite.uv[1]
+                    let rightUV = left + sprite.uv[2], bottom = top + sprite.uv[3]
+                    let first = mesh.vertex(base, up, SIMD2(left, bottom), uv2: SIMD2(-width / 2, 0))
+                    let second = mesh.vertex(base, up, SIMD2(rightUV, bottom), uv2: SIMD2(width / 2, 0))
+                    let third = mesh.vertex(base, up, SIMD2(rightUV, top), uv2: SIMD2(width / 2, height))
+                    let fourth = mesh.vertex(base, up, SIMD2(left, top), uv2: SIMD2(-width / 2, height))
+                    mesh.quad(0, first, second, third, fourth)
+                }
+            }
+        }
+        let geometry = mesh.geometry(materials: [material])
+        let (minimum, maximum) = geometry.boundingBox
+        geometry.boundingBox = (SCNVector3(minimum.x - 2, minimum.y, minimum.z - 2),
+                                SCNVector3(maximum.x + 2, maximum.y + 2.2, maximum.z + 2))
+        let node = SCNNode(geometry: geometry)
+        node.name = "spectatorSprites"
+        return node
     }
 }
