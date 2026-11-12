@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		A11111111111111111111111 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A22222222222222222222222 /* Assets.xcassets */; };
 		10B1FC7BDD9747974A412DFE /* CarStyle.swift in Sources */ = {isa = PBXBuildFile; fileRef = EBD5324DC0CD02A58244E5BD /* CarStyle.swift */; };
 		12B570A003C6AF849514C61A /* Terrain.swift in Sources */ = {isa = PBXBuildFile; fileRef = 120A446F9EB2A1422CF69065 /* Terrain.swift */; };
 		175E6960DEBBAE59561F4DCA /* TrackScenery.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1016E4E71A516656B47A968E /* TrackScenery.swift */; };
@@ -30,6 +31,7 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		A22222222222222222222222 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Resources/Assets.xcassets; sourceTree = "<group>"; };
 		08877146163F79351EDC92DB /* HUDScene.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HUDScene.swift; sourceTree = "<group>"; };
 		1016E4E71A516656B47A968E /* TrackScenery.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrackScenery.swift; sourceTree = "<group>"; };
 		120A446F9EB2A1422CF69065 /* Terrain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Terrain.swift; sourceTree = "<group>"; };
@@ -89,6 +91,7 @@
 		4BEB0A5464BF812EAC7E0813 = {
 			isa = PBXGroup;
 			children = (
+				A22222222222222222222222 /* Assets.xcassets */,
 				4A1EB44A5ECF153B19955066 /* Racing */,
 				CE58710F08D3D85BC5DCECD0 /* Products */,
 			);
@@ -163,6 +166,7 @@
 			buildPhases = (
 				412F29E11D089FDA8FB22F80 /* Copy Resources */,
 				AC09EC5C2D9BA5F2EF4DD6C5 /* Sources */,
+				A33333333333333333333333 /* Resources */,
 			);
 			buildRules = (
 			);
@@ -204,6 +208,17 @@
 			);
 		};
 /* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		A33333333333333333333333 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A11111111111111111111111 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
 		412F29E11D089FDA8FB22F80 /* Copy Resources */ = {

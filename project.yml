@@ -17,6 +17,7 @@ targets:
       - path: Sources/Racing
         excludes:
           - "**/.DS_Store"
+      - path: Resources/Assets.xcassets
     preBuildScripts:
       - name: Copy Resources
         basedOnDependencyAnalysis: false
