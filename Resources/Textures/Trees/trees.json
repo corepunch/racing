@@ -1,6 +1,6 @@
 {
   "atlas" : "tree-atlas.png",
-  "source" : "Original bitmap trees and spectators; Kenney Nature Kit (CC0) props and forest walls",
+  "source" : "Original bitmap trees and spectators; Kenney Nature Kit (CC0) props; ImageGen forest walls",
   "sprites" : [
     {
       "aspect" : 0.43907563025210083,
@@ -898,19 +898,19 @@
   ],
   "walls" : {
     "alpine" : {
-      "file" : "forest-wall-alpine.png",
+      "file" : "forest-wall-alpine-painted.png",
       "height" : 30,
-      "width" : 120
+      "width" : 90
     },
     "coastal" : {
-      "file" : "forest-wall-coastal.png",
+      "file" : "forest-wall-coastal-painted.png",
       "height" : 30,
-      "width" : 120
+      "width" : 90
     },
     "temperate" : {
-      "file" : "forest-wall-temperate.png",
+      "file" : "forest-wall-temperate-painted.png",
       "height" : 30,
-      "width" : 120
+      "width" : 90
     }
   }
 }

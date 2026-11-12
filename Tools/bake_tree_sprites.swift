@@ -453,6 +453,12 @@ var wallEntries: [String: Any] = [:]
 
 for (b, biome) in biomes.enumerated() {
     if biome == "arid" { continue }
+    // Keep the authored painted walls when rebuilding the sprite atlas.
+    let painted = "forest-wall-\(biome)-painted.png"
+    if FileManager.default.fileExists(atPath: outDir.appendingPathComponent(painted).path) {
+        wallEntries[biome] = ["file": painted, "width": 90.0, "height": Double(wallHeight)]
+        continue
+    }
     var seed = UInt64(1234 + b * 77)
     func rand() -> Float {
         seed = seed &* 6364136223846793005 &+ 1442695040888963407
@@ -510,7 +516,7 @@ for (b, biome) in biomes.enumerated() {
 }
 
 let manifest: [String: Any] = ["atlas": "tree-atlas.png", "sprites": spriteEntries, "walls": wallEntries,
-                               "source": "Original bitmap trees and spectators; Kenney Nature Kit (CC0) props and forest walls"]
+                               "source": "Original bitmap trees and spectators; Kenney Nature Kit (CC0) props; ImageGen forest walls when available"]
 let json = try JSONSerialization.data(withJSONObject: manifest, options: [.prettyPrinted, .sortedKeys])
 try json.write(to: outDir.appendingPathComponent("trees.json"))
 print("wrote \(outDir.path)")

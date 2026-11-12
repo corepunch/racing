@@ -22,11 +22,13 @@ struct TreeSpriteManifest: Decodable {
 
     static let directory = "Textures/Trees"
 
-    static let shared: TreeSpriteManifest? = {
-        guard let url = Bundle.main.url(forResource: "trees", withExtension: "json", subdirectory: directory),
+    static func load(_ name: String) -> TreeSpriteManifest? {
+        guard let url = Bundle.main.url(forResource: name, withExtension: "json", subdirectory: directory),
               let data = try? Data(contentsOf: url) else { return nil }
         return try? JSONDecoder().decode(TreeSpriteManifest.self, from: data)
-    }()
+    }
+
+    static let shared = load("trees")
 
     static func image(_ file: String) -> UIImage? {
         let name = (file as NSString).deletingPathExtension
@@ -43,7 +45,8 @@ enum ForestBuilder {
         m.lightingModel = billboard ? .constant : .lambert
         m.diffuse.contents = image
         m.diffuse.mipFilter = .linear
-        m.diffuse.wrapS = billboard ? .clamp : .repeat
+        // Mirror the painted wall on alternate repeats so its end silhouettes meet cleanly.
+        m.diffuse.wrapS = billboard ? .clamp : .mirror
         m.diffuse.wrapT = .clamp
         m.isDoubleSided = true
         m.blendMode = .replace
@@ -78,7 +81,16 @@ enum ForestBuilder {
         }
         let env = field.env
         let biome = env.forest.rawValue
-        let sprites = manifest.sprites.filter { $0.biomes.contains(biome) && $0.category != "people" }
+        let treeManifest: TreeSpriteManifest
+        let treeAtlas: UIImage
+        if let painted = TreeSpriteManifest.load("trees-painted"),
+           painted.sprites.contains(where: { $0.biomes.contains(biome) }),
+           let image = TreeSpriteManifest.image(painted.atlas) {
+            (treeManifest, treeAtlas) = (painted, image)
+        } else {
+            (treeManifest, treeAtlas) = (manifest, atlas)
+        }
+        let sprites = treeManifest.sprites.filter { $0.biomes.contains(biome) && $0.category != "people" }
         guard !sprites.isEmpty else { return root }
         let noise = Noise2D(seed: env.seed &+ 405)
 
@@ -86,11 +98,19 @@ enum ForestBuilder {
             root.addChildNode(forestWalls(field: field, wall: wall, material: material(image, billboard: false),
                                           noise: noise))
         }
-        root.addChildNode(scatter(field: field, sprites: sprites, material: material(atlas, billboard: true),
+        root.addChildNode(scatter(field: field, sprites: sprites, material: material(treeAtlas, billboard: true),
                                   noise: noise))
-        let people = manifest.sprites.filter { $0.category == "people" && $0.biomes.contains(biome) }
+        let peopleManifest: TreeSpriteManifest
+        let peopleAtlas: UIImage
+        if let painted = TreeSpriteManifest.load("people-painted"),
+           let image = TreeSpriteManifest.image(painted.atlas) {
+            (peopleManifest, peopleAtlas) = (painted, image)
+        } else {
+            (peopleManifest, peopleAtlas) = (manifest, atlas)
+        }
+        let people = peopleManifest.sprites.filter { $0.category == "people" && $0.biomes.contains(biome) }
         if !people.isEmpty {
-            root.addChildNode(spectators(field: field, sprites: people, material: material(atlas, billboard: true)))
+            root.addChildNode(spectators(field: field, sprites: people, material: material(peopleAtlas, billboard: true)))
         }
         return root
     }
