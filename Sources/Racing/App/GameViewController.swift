@@ -18,11 +18,32 @@ final class GameViewController: UIViewController {
         scnView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         view.addSubview(scnView)
 
-        // ── Game scene ────────────────────────────────────────────────────────
+        let loading = UILabel(frame: view.bounds)
+        loading.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        loading.backgroundColor = .black
+        loading.textColor = .white
+        loading.textAlignment = .center
+        loading.font = .systemFont(ofSize: 24, weight: .semibold)
+        loading.text = "Preparing track…"
+        view.addSubview(loading)
+
         // Launch arguments: `-track <0...3>` picks a circuit, `-autoDrive YES` runs the demo.
         let trackIndex = UserDefaults.standard.integer(forKey: "track")
-        gameScene = GameScene(definition: TrackLibrary.all[min(max(trackIndex, 0), TrackLibrary.all.count - 1)])
-        gameScene.autoDrive = UserDefaults.standard.bool(forKey: "autoDrive")
+        let definition = TrackLibrary.all[min(max(trackIndex, 0), TrackLibrary.all.count - 1)]
+        let autoDrive = UserDefaults.standard.bool(forKey: "autoDrive")
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let scene = GameScene(definition: definition)
+            scene.autoDrive = autoDrive
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self else { return }
+                self.installScene(scene)
+                loading.removeFromSuperview()
+            }
+        }
+    }
+
+    private func installScene(_ scene: GameScene) {
+        gameScene = scene
         scnView.scene     = gameScene.scene
         scnView.delegate  = gameScene
         scnView.isPlaying = true
