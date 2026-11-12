@@ -1,0 +1,492 @@
+{
+  "atlas" : "tree-atlas.png",
+  "source" : "Kenney Nature Kit (CC0)",
+  "sprites" : [
+    {
+      "aspect" : 0.25201612903225806,
+      "biomes" : [
+        "alpine"
+      ],
+      "height" : 18,
+      "name" : "tree_pineTallA_detailed",
+      "uv" : [
+        0.03173828125,
+        0.00439453125,
+        0.06103515625,
+        0.2421875
+      ]
+    },
+    {
+      "aspect" : 0.19919517102615694,
+      "biomes" : [
+        "alpine"
+      ],
+      "height" : 17,
+      "name" : "tree_pineTallB_detailed",
+      "uv" : [
+        0.1630859375,
+        0.00390625,
+        0.04833984375,
+        0.24267578125
+      ]
+    },
+    {
+      "aspect" : 0.2857142857142857,
+      "biomes" : [
+        "alpine",
+        "temperate"
+      ],
+      "height" : 19,
+      "name" : "tree_pineTallC_detailed",
+      "uv" : [
+        0.27783203125,
+        0.00390625,
+        0.0693359375,
+        0.24267578125
+      ]
+    },
+    {
+      "aspect" : 0.23138832997987926,
+      "biomes" : [
+        "alpine"
+      ],
+      "height" : 16,
+      "name" : "tree_pineTallD_detailed",
+      "uv" : [
+        0.4091796875,
+        0.00390625,
+        0.05615234375,
+        0.24267578125
+      ]
+    },
+    {
+      "aspect" : 0.44979919678714858,
+      "biomes" : [
+        "alpine",
+        "temperate"
+      ],
+      "height" : 12,
+      "name" : "tree_pineRoundA",
+      "uv" : [
+        0.5078125,
+        0.00341796875,
+        0.109375,
+        0.2431640625
+      ]
+    },
+    {
+      "aspect" : 0.38152610441767071,
+      "biomes" : [
+        "alpine"
+      ],
+      "height" : 13,
+      "name" : "tree_pineRoundC",
+      "uv" : [
+        0.64111328125,
+        0.00341796875,
+        0.0927734375,
+        0.2431640625
+      ]
+    },
+    {
+      "aspect" : 0.42253521126760563,
+      "biomes" : [
+        "alpine",
+        "temperate"
+      ],
+      "height" : 11,
+      "name" : "tree_pineRoundE",
+      "uv" : [
+        0.76123046875,
+        0.00390625,
+        0.1025390625,
+        0.24267578125
+      ]
+    },
+    {
+      "aspect" : 0.34205231388329982,
+      "biomes" : [
+        "alpine"
+      ],
+      "height" : 14,
+      "name" : "tree_pineDefaultA",
+      "uv" : [
+        0.89599609375,
+        0.00390625,
+        0.0830078125,
+        0.24267578125
+      ]
+    },
+    {
+      "aspect" : 0.34205231388329982,
+      "biomes" : [
+        "alpine",
+        "coastal"
+      ],
+      "height" : 13,
+      "name" : "tree_pineDefaultB",
+      "uv" : [
+        0.02099609375,
+        0.25390625,
+        0.0830078125,
+        0.24267578125
+      ]
+    },
+    {
+      "aspect" : 0.36947791164658633,
+      "biomes" : [
+        "alpine",
+        "temperate"
+      ],
+      "height" : 12,
+      "name" : "tree_cone",
+      "uv" : [
+        0.142578125,
+        0.25341796875,
+        0.08984375,
+        0.2431640625
+      ]
+    },
+    {
+      "aspect" : 0.36947791164658633,
+      "biomes" : [
+        "alpine"
+      ],
+      "height" : 13,
+      "name" : "tree_cone_dark",
+      "uv" : [
+        0.267578125,
+        0.25341796875,
+        0.08984375,
+        0.2431640625
+      ]
+    },
+    {
+      "aspect" : 0.52100840336134457,
+      "biomes" : [
+        "temperate"
+      ],
+      "height" : 12,
+      "name" : "tree_oak",
+      "uv" : [
+        0.376953125,
+        0.2587890625,
+        0.12109375,
+        0.232421875
+      ]
+    },
+    {
+      "aspect" : 0.52100840336134457,
+      "biomes" : [
+        "temperate",
+        "alpine"
+      ],
+      "height" : 12,
+      "name" : "tree_oak_dark",
+      "uv" : [
+        0.501953125,
+        0.2587890625,
+        0.12109375,
+        0.232421875
+      ]
+    },
+    {
+      "aspect" : 0.63265306122448983,
+      "biomes" : [
+        "temperate",
+        "coastal"
+      ],
+      "height" : 11,
+      "name" : "tree_detailed",
+      "uv" : [
+        0.626953125,
+        0.279296875,
+        0.12109375,
+        0.19140625
+      ]
+    },
+    {
+      "aspect" : 0.63265306122448983,
+      "biomes" : [
+        "temperate",
+        "alpine"
+      ],
+      "height" : 11,
+      "name" : "tree_detailed_dark",
+      "uv" : [
+        0.751953125,
+        0.279296875,
+        0.12109375,
+        0.19140625
+      ]
+    },
+    {
+      "aspect" : 0.44265593561368211,
+      "biomes" : [
+        "temperate",
+        "coastal"
+      ],
+      "height" : 10,
+      "name" : "tree_default",
+      "uv" : [
+        0.8837890625,
+        0.25390625,
+        0.107421875,
+        0.24267578125
+      ]
+    },
+    {
+      "aspect" : 0.65608465608465605,
+      "biomes" : [
+        "temperate"
+      ],
+      "height" : 9,
+      "name" : "tree_fat",
+      "uv" : [
+        0.001953125,
+        0.53271484375,
+        0.12109375,
+        0.1845703125
+      ]
+    },
+    {
+      "aspect" : 0.23694779116465864,
+      "biomes" : [
+        "temperate"
+      ],
+      "height" : 14,
+      "name" : "tree_tall",
+      "uv" : [
+        0.15869140625,
+        0.50341796875,
+        0.0576171875,
+        0.2431640625
+      ]
+    },
+    {
+      "aspect" : 0.45582329317269077,
+      "biomes" : [
+        "temperate"
+      ],
+      "height" : 12,
+      "name" : "tree_thin",
+      "uv" : [
+        0.25732421875,
+        0.50341796875,
+        0.11083984375,
+        0.2431640625
+      ]
+    },
+    {
+      "aspect" : 0.23340040241448692,
+      "biomes" : [
+        "temperate",
+        "coastal"
+      ],
+      "height" : 9,
+      "name" : "tree_simple",
+      "uv" : [
+        0.4091796875,
+        0.50390625,
+        0.056640625,
+        0.24267578125
+      ]
+    },
+    {
+      "aspect" : 0.32193158953722334,
+      "biomes" : [
+        "temperate",
+        "arid"
+      ],
+      "height" : 6,
+      "name" : "tree_small",
+      "uv" : [
+        0.5234375,
+        0.50390625,
+        0.078125,
+        0.24267578125
+      ]
+    },
+    {
+      "aspect" : 0.52100840336134457,
+      "biomes" : [
+        "temperate"
+      ],
+      "height" : 12,
+      "name" : "tree_oak_fall",
+      "uv" : [
+        0.626953125,
+        0.5087890625,
+        0.12109375,
+        0.232421875
+      ]
+    },
+    {
+      "aspect" : 0.63265306122448983,
+      "biomes" : [
+        "temperate"
+      ],
+      "height" : 11,
+      "name" : "tree_detailed_fall",
+      "uv" : [
+        0.751953125,
+        0.529296875,
+        0.12109375,
+        0.19140625
+      ]
+    },
+    {
+      "aspect" : 0.45582329317269077,
+      "biomes" : [
+        "arid"
+      ],
+      "height" : 11,
+      "name" : "tree_thin_fall",
+      "uv" : [
+        0.88232421875,
+        0.50341796875,
+        0.11083984375,
+        0.2431640625
+      ]
+    },
+    {
+      "aspect" : 0.76073619631901845,
+      "biomes" : [
+        "coastal"
+      ],
+      "height" : 13,
+      "name" : "tree_palmTall",
+      "uv" : [
+        0.001953125,
+        0.79541015625,
+        0.12109375,
+        0.1591796875
+      ]
+    },
+    {
+      "aspect" : 0.72727272727272729,
+      "biomes" : [
+        "coastal"
+      ],
+      "height" : 14,
+      "name" : "tree_palmDetailedTall",
+      "uv" : [
+        0.14453125,
+        0.81591796875,
+        0.0859375,
+        0.1181640625
+      ]
+    },
+    {
+      "aspect" : 0.67759562841530052,
+      "biomes" : [
+        "coastal"
+      ],
+      "height" : 11,
+      "name" : "tree_palmBend",
+      "uv" : [
+        0.251953125,
+        0.78564453125,
+        0.12109375,
+        0.1787109375
+      ]
+    },
+    {
+      "aspect" : 0.91666666666666663,
+      "biomes" : [
+        "coastal"
+      ],
+      "height" : 8,
+      "name" : "tree_palmDetailedShort",
+      "uv" : [
+        0.39453125,
+        0.828125,
+        0.0859375,
+        0.09375
+      ]
+    },
+    {
+      "aspect" : 0.48995983935742971,
+      "biomes" : [
+        "arid"
+      ],
+      "height" : 9,
+      "name" : "tree_plateau",
+      "uv" : [
+        0.5029296875,
+        0.75341796875,
+        0.119140625,
+        0.2431640625
+      ]
+    },
+    {
+      "aspect" : 0.48995983935742971,
+      "biomes" : [
+        "arid"
+      ],
+      "height" : 9,
+      "name" : "tree_plateau_dark",
+      "uv" : [
+        0.6279296875,
+        0.75341796875,
+        0.119140625,
+        0.2431640625
+      ]
+    },
+    {
+      "aspect" : 1.1851851851851851,
+      "biomes" : [
+        "temperate",
+        "coastal",
+        "arid",
+        "alpine"
+      ],
+      "height" : 2.5999999046325684,
+      "name" : "plant_bushLarge",
+      "uv" : [
+        0.765625,
+        0.83544921875,
+        0.09375,
+        0.0791015625
+      ]
+    },
+    {
+      "aspect" : 0.60162601626016265,
+      "biomes" : [
+        "temperate",
+        "coastal",
+        "arid"
+      ],
+      "height" : 2.2000000476837158,
+      "name" : "plant_bushDetailed",
+      "uv" : [
+        0.91943359375,
+        0.85107421875,
+        0.0361328125,
+        0.06005859375
+      ]
+    }
+  ],
+  "walls" : {
+    "alpine" : {
+      "file" : "forest-wall-alpine.png",
+      "height" : 30,
+      "width" : 120
+    },
+    "arid" : {
+      "file" : "forest-wall-arid.png",
+      "height" : 30,
+      "width" : 120
+    },
+    "coastal" : {
+      "file" : "forest-wall-coastal.png",
+      "height" : 30,
+      "width" : 120
+    },
+    "temperate" : {
+      "file" : "forest-wall-temperate.png",
+      "height" : 30,
+      "width" : 120
+    }
+  }
+}

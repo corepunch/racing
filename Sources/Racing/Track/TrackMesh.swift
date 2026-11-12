@@ -6,27 +6,44 @@ import simd
 /// so materials can be swapped independently.
 final class TrackMeshBuilder {
 
-    // Cross-section profile: (offsetRight m, heightUp m, materialSlot)
-    // Slots: 0 = asphalt, 1 = kerb (alternating red/white), 2 = gravel shoulder, 3 = terrain
+    // Cross-section profile: (offsetRight m, heightUp m, slot)
+    // Slots: 0 = road surface, 1 = kerb, 2 = shoulder, 3 = skirt down into the terrain.
     private static let profile: [(x: Float, y: Float, slot: Int)] = [
-        (-16.0, -0.4, 3),   // outer terrain
-        (-12.0, -0.4, 3),
-        (-12.0,  0.0, 3),
-        (-10.0,  0.0, 2),   // gravel shoulder L
+        (-11.2, -1.4, 3),   // skirt L
+        (-10.0,  0.0, 2),   // shoulder L
         ( -7.5,  0.0, 2),
         ( -7.5,  0.0, 1),   // kerb L outer
         ( -5.5,  0.14, 1),  // kerb L inner (raised)
-        ( -5.5,  0.0, 0),   // asphalt L edge
-        (  0.0,  0.0, 0),   // asphalt centre
-        (  5.5,  0.0, 0),   // asphalt R edge
+        ( -5.5,  0.0, 0),   // road L edge
+        (  0.0,  0.0, 0),   // road centre
+        (  5.5,  0.0, 0),   // road R edge
         (  5.5,  0.14, 1),  // kerb R inner
         (  7.5,  0.0, 1),   // kerb R outer
-        (  7.5,  0.0, 2),   // gravel shoulder R
-        ( 10.0,  0.0, 2),
-        ( 12.0,  0.0, 3),   // terrain R
-        ( 12.0, -0.4, 3),
-        ( 16.0, -0.4, 3),
+        (  7.5,  0.0, 2),   // shoulder R
+        ( 10.0,  0.0, 3),
+        ( 11.2, -1.4, 3),   // skirt R
     ]
+
+    // Material indices returned by makeMaterials().
+    private enum Mat: Int, CaseIterable {
+        case tarmac, dirt, gravelRoad, kerb, gravelShoulder, pavement, concrete
+    }
+
+    private static func material(slot: Int, sample s: PathSample) -> Mat {
+        switch slot {
+        case 0:
+            switch s.surface {
+            case .tarmac: return .tarmac
+            case .dirt: return .dirt
+            case .gravel: return .gravelRoad
+            }
+        case 1: return .kerb
+        default:
+            if s.zone == .tunnel { return .concrete }
+            if s.townInfluence > 0.5 { return .pavement }
+            return .gravelShoulder
+        }
+    }
 
     static func buildTrackNode(path: TrackPath) -> SCNNode {
         let root = SCNNode()
@@ -53,11 +70,6 @@ final class TrackMeshBuilder {
 
     // MARK: - Geometry builder
 
-    // Material slot assigned per profile strip (by left vertex slot)
-    private static func slotForStrip(_ pi: Int) -> Int {
-        profile[pi].slot
-    }
-
     private static func buildGeometry(path: TrackPath) -> (SCNGeometry, SCNGeometry) {
         let samples = path.samples
         let n = samples.count
@@ -82,12 +94,12 @@ final class TrackMeshBuilder {
                 let pos    = s.position + offset
                 positions.append(SCNVector3(pos.x, pos.y, pos.z))
                 normals.append(SCNVector3(s.up.x, s.up.y, s.up.z))
-                texcoords.append(CGPoint(x: CGFloat(prof.x / 11 + 0.5), y: v))
+                let u = prof.slot == 0 ? prof.x / 11 + 0.5 : prof.x / 4
+                texcoords.append(CGPoint(x: CGFloat(u), y: v))
             }
         }
 
-        // Build separate index arrays per material slot (0..3)
-        let slotCount = 4
+        let slotCount = Mat.allCases.count
         var slotIndices: [[Int32]] = Array(repeating: [], count: slotCount)
 
         for si in 0..<n {
@@ -97,7 +109,7 @@ final class TrackMeshBuilder {
                 let b = Int32(si * p + pi + 1)
                 let c = Int32(ni * p + pi)
                 let d = Int32(ni * p + pi + 1)
-                let slot = slotForStrip(pi)
+                let slot = material(slot: profile[pi].slot, sample: samples[si]).rawValue
                 slotIndices[slot].append(contentsOf: [a, b, c, b, d, c])
             }
         }
@@ -106,15 +118,17 @@ final class TrackMeshBuilder {
         let nrmSource = SCNGeometrySource(normals: normals)
         let uvSource  = SCNGeometrySource(textureCoordinates: texcoords)
 
-        // One SCNGeometryElement per material slot
-        let elements = slotIndices.map { idxs in
-            SCNGeometryElement(indices: idxs, primitiveType: .triangles)
+        // One SCNGeometryElement per used material
+        let materials = makeMaterials()
+        var elements = [SCNGeometryElement]()
+        var used = [SCNMaterial]()
+        for (slot, idxs) in slotIndices.enumerated() where !idxs.isEmpty {
+            elements.append(SCNGeometryElement(indices: idxs, primitiveType: .triangles))
+            used.append(materials[slot])
         }
 
         let geo = SCNGeometry(sources: [posSource, nrmSource, uvSource], elements: elements)
-
-        // Assign materials in slot order
-        geo.materials = makeMaterials()
+        geo.materials = used
 
         // Physics uses the full mesh
         let allIndices = slotIndices.flatMap { $0 }
@@ -124,7 +138,7 @@ final class TrackMeshBuilder {
         return (geo, physGeo)
     }
 
-    // MARK: - Materials (one per slot: 0=asphalt, 1=kerb, 2=gravel shoulder, 3=terrain)
+    // MARK: - Materials (indexed by Mat)
 
     private static func makeMaterials() -> [SCNMaterial] {
         let asphalt = SCNMaterial()
@@ -147,140 +161,62 @@ final class TrackMeshBuilder {
         asphalt.diffuse.mipFilter = .linear
         asphalt.diffuse.maxAnisotropy = 16
 
-        let kerb = SCNMaterial()
-        kerb.diffuse.contents      = UIColor(red: 0.85, green: 0.15, blue: 0.15, alpha: 1)
-        kerb.roughness.contents    = 0.7
-        kerb.isDoubleSided         = true
+        func textured(_ image: UIImage, scale: SIMD2<Float>, clampU: Bool = false) -> SCNMaterial {
+            let m = SCNMaterial()
+            m.lightingModel = .physicallyBased
+            m.diffuse.contents = image
+            m.diffuse.wrapS = clampU ? .clamp : .repeat
+            m.diffuse.wrapT = .repeat
+            m.diffuse.mipFilter = .linear
+            m.diffuse.maxAnisotropy = 16
+            m.diffuse.contentsTransform = SCNMatrix4MakeScale(scale.x, scale.y, 1)
+            m.roughness.contents = 0.95
+            m.metalness.contents = 0
+            m.isDoubleSided = true
+            return m
+        }
 
-        let shoulder = SCNMaterial()
-        shoulder.diffuse.contents  = UIColor(red: 0.60, green: 0.50, blue: 0.35, alpha: 1)
-        shoulder.roughness.contents = 1.0
-        shoulder.isDoubleSided     = true
+        let dirt = textured(ProceduralTextures.dirtRoad(seed: 21), scale: SIMD2(1, 1), clampU: true)
+        let gravelRoad = textured(ProceduralTextures.gravel(seed: 22, tint: SIMD3(0.62, 0.58, 0.52)),
+                                  scale: SIMD2(2.75, 3))
+        let kerb = textured(ProceduralTextures.kerb(), scale: SIMD2(1, 1))
+        kerb.roughness.contents = 0.7
+        let shoulder = textured(ProceduralTextures.gravel(seed: 23), scale: SIMD2(1, 3))
+        let pavement = textured(ProceduralTextures.pavement(seed: 24), scale: SIMD2(1, 3))
+        let concrete = textured(ProceduralTextures.concrete(seed: 25), scale: SIMD2(1, 3))
 
-        let terrain = SCNMaterial()
-        terrain.diffuse.contents   = UIColor(red: 0.45, green: 0.55, blue: 0.30, alpha: 1)
-        terrain.roughness.contents = 1.0
-        terrain.isDoubleSided      = true
-
-        return [asphalt, kerb, shoulder, terrain]
+        return [asphalt, dirt, gravelRoad, kerb, shoulder, pavement, concrete]
     }
 }
 
-// MARK: - Track decorations — all Kenney assets, no procedural geometry
+// MARK: - Track decorations — procedurally generated props
 
 final class TrackDecorations {
 
-    private static var templates: [String: SCNNode] = [:]
-
-    // Loads from Props/ (OBJ) first, then Decorations/ (USDZ) as fallback.
-    private static func loadTemplate(_ name: String, scale: Float = 1) -> SCNNode? {
-        let key = "\(name)@\(scale)"
-        if let t = templates[key] { return t }
-
-        let url: URL?
-        if let u = Bundle.main.url(forResource: name, withExtension: "obj",
-                                    subdirectory: "Props") {
-            url = u
-        } else if let u = Bundle.main.url(forResource: name, withExtension: "usdz",
-                                           subdirectory: "Decorations") {
-            url = u
-        } else {
-            return nil
-        }
-        guard let u = url,
-              let scene = try? SCNScene(url: u, options: [.convertToYUp: true]) else { return nil }
-        let axes = SCNNode()
-        axes.addChildNode(scene.rootNode)
-        if name == "barrierRed" || name == "barrierWall" || name == "fenceStraight" {
-            axes.simdEulerAngles.y = .pi / 2
-        }
-        let content = SCNNode()
-        content.addChildNode(axes)
-        let bounds = content.boundingBox
-        content.simdPosition = -SIMD3<Float>(
-            Float(bounds.min.x + bounds.max.x) * 0.5,
-            Float(bounds.min.y),
-            Float(bounds.min.z + bounds.max.z) * 0.5
-        )
-        let root = SCNNode()
-        root.name = name
-        root.addChildNode(content)
-        if scale != 1 { root.simdScale = SIMD3<Float>(repeating: scale) }
-        templates[key] = root
-        return root
-    }
-
     // MARK: - Public entry point
 
-    static func addDecorations(to parentNode: SCNNode, path: TrackPath) {
+    static func addDecorations(to parentNode: SCNNode, path: TrackPath, field: TerrainField) {
         let samples = path.samples
         let count   = samples.count
 
-        // Start/finish gantry at sample 0
-        placeAlongTrack("overhead", scale: 11, parent: parentNode,
-                        sample: samples[0], sideOffset: 0)
-        // Checkered flags flanking start
-        placeAlongTrack("flagCheckers", scale: 7, parent: parentNode,
-                        sample: samples[0], sideOffset:  7)
-        placeAlongTrack("flagCheckers", scale: 7, parent: parentNode,
-                        sample: samples[0], sideOffset: -7)
+        let startSample = samples[0]
+        parentNode.addChildNode(RaceProps.startGantry(sample: startSample))
+        parentNode.addChildNode(RaceProps.flag(sample: startSample, side: -1))
+        parentNode.addChildNode(RaceProps.flag(sample: startSample, side: 1))
 
-        // Barriers along kerb edges every 4 samples.
-        for i in stride(from: 0, to: count, by: 4) {
-            let s = samples[i]
-            placeAlongTrack("barrierRed", scale: 7, parent: parentNode,
-                            sample: s, sideOffset:  s.halfWidth + 2.5)
-            placeAlongTrack("barrierRed", scale: 7, parent: parentNode,
-                            sample: s, sideOffset: -(s.halfWidth + 2.5))
-        }
-
-        // Kenney lightPostLarge every 10 samples (0.796 m tall × 8 = 6.4 m)
-        for i in stride(from: 0, to: count, by: 10) {
-            let s = samples[i]
-            placeInward("lightPostLarge", scale: 8, parent: parentNode,
-                            sample: s, sideOffset:  s.halfWidth + 1.5)
-            placeInward("lightPostLarge", scale: 8, parent: parentNode,
-                            sample: s, sideOffset: -(s.halfWidth + 1.5))
-        }
-
-        // Grandstands every 40 samples; trees fill alternate gaps — start at 20 to clear the start box
-        for i in stride(from: 20, to: count, by: 20) {
-            let s    = samples[i]
-            let slot = (i - 20) / 20
-            if slot % 3 == 2 {
-                // tree cluster
-                placeInward("treeLarge", scale: 5, parent: parentNode, sample: s, sideOffset:  21)
-                placeInward("treeLarge", scale: 5, parent: parentNode, sample: s, sideOffset: -21)
-            } else {
-                // grandstand
-                placeInward("grandStandCovered", scale: 6, parent: parentNode, sample: s, sideOffset:  24)
-                placeInward("grandStandCovered", scale: 6, parent: parentNode, sample: s, sideOffset: -24)
+        // Grandstands either side of the line, skipped where a footprint would hit a road.
+        guard startSample.zone == nil, startSample.townInfluence < 0.2 else { return }
+        var seed: UInt64 = 1
+        for arc: Float in [-24, 22] {
+            let index = Int((arc / path.totalLength * Float(count)).rounded())
+            let s = path.sample(at: index)
+            guard s.zone == nil, s.townInfluence < 0.2 else { continue }
+            for side: Float in [-1, 1] {
+                seed += 1
+                if let stand = RaceProps.grandstand(sample: s, side: side, field: field, seed: seed) {
+                    parentNode.addChildNode(stand)
+                }
             }
         }
-    }
-
-    // MARK: - Placement helpers
-
-    // Places a prop aligned with the track forward direction (barriers, flags, gantries).
-    private static func placeAlongTrack(_ name: String, scale: Float, parent: SCNNode,
-                                 sample: PathSample, sideOffset: Float) {
-          place(name, scale: scale, parent: parent, sample: sample,
-              sideOffset: sideOffset, forward: sample.forward)
-    }
-
-    // Places a prop facing inward toward the track (grandstands, trees).
-    private static func placeInward(_ name: String, scale: Float, parent: SCNNode,
-                                     sample: PathSample, sideOffset: Float) {
-        place(name, scale: scale, parent: parent, sample: sample,
-              sideOffset: sideOffset, forward: sideOffset > 0 ? -sample.right : sample.right)
-    }
-
-    private static func place(_ name: String, scale: Float, parent: SCNNode,
-                              sample: PathSample, sideOffset: Float, forward: SIMD3<Float>) {
-        guard let tmpl = loadTemplate(name, scale: scale) else { return }
-        let node = tmpl.clone()
-        node.simdPosition = sample.position + sample.right * sideOffset
-        node.simdEulerAngles = SIMD3<Float>(0, atan2(-forward.x, -forward.z), 0)
-        parent.addChildNode(node)
     }
 }

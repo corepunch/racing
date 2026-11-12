@@ -10,9 +10,10 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
     let scene = SCNScene()
 
     // --- Sub-systems ---
-    let track             = TrackPath()
+    let track: TrackPath
     private let physics   = CarController()
     private var carNode: CarNode!
+    private let audioEnabled: Bool
 
     // --- Car style (change to any CarStyle case to swap the visual model) ---
     var carStyle: CarStyle = .truckGreen
@@ -20,7 +21,7 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
     // --- Audio ---
     private var enginePlayer: AVAudioPlayer?
     private var skidPlayer:   AVAudioPlayer?
-    private var cameraNode: SCNNode!
+    private(set) var cameraNode: SCNNode!
     private var camera: SCNCamera!
 
     // --- Inputs (set by GameViewController / InputManager) ---
@@ -31,6 +32,7 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
     // --- Demo auto-drive ---
     var autoDrive = false
     private var autoDriveProgress: Float = 0
+    private var autoDriveSpeed: Float = 30
 
     // --- Lap state ---
     private var lapCount       = 0
@@ -52,7 +54,9 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
 
     // MARK: - Init
 
-    override init() {
+    init(definition: TrackDefinition = TrackLibrary.all[0], audio: Bool = true) {
+        track = TrackPath(definition: definition)
+        audioEnabled = audio
         super.init()
         buildScene()
     }
@@ -70,10 +74,11 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
         } else {
             assertionFailure("Missing bundled overcast LDR environment")
         }
-        scene.fogStartDistance = 70
-        scene.fogEndDistance = 460
+        let env = track.definition.environment
+        scene.fogStartDistance = env.fogStart
+        scene.fogEndDistance = env.fogEnd
         scene.fogDensityExponent = 1.25
-        scene.fogColor = UIColor(red: 0.65, green: 0.72, blue: 0.73, alpha: 1)
+        scene.fogColor = env.fogColor
 
         addLighting()
 
@@ -81,11 +86,17 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
         let trackNode = TrackMeshBuilder.buildTrackNode(path: track)
         scene.rootNode.addChildNode(trackNode)
 
-        // Decorations
-        TrackDecorations.addDecorations(to: scene.rootNode, path: track)
+        // Procedural terrain, water and scenery
+        let field = TerrainField(path: track)
+        let terrain = TerrainBuilder.build(field: field)
+        scene.rootNode.addChildNode(terrain.node)
+        if let level = env.waterLevel {
+            scene.rootNode.addChildNode(TerrainBuilder.water(field: field, level: level))
+        }
+        scene.rootNode.addChildNode(TrackScenery.build(field: field, terrainMaterial: terrain.material))
 
-        // Ground plane beyond the track ribbon (simple grass)
-        addGround()
+        // Decorations
+        TrackDecorations.addDecorations(to: scene.rootNode, path: track, field: field)
 
         // Car
         carNode = CarNode(style: carStyle)
@@ -99,7 +110,7 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
         setupCamera()
 
         // Audio
-        setupAudio()
+        if audioEnabled { setupAudio() }
     }
 
     private func addLighting() {
@@ -120,7 +131,8 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
         sunLight.shadowColor = UIColor(white: 0, alpha: 0.45)
         let sunNode          = SCNNode()
         sunNode.light        = sunLight
-        sunNode.eulerAngles  = SCNVector3(-Float.pi / 4.5, Float.pi / 6, 0)
+        let sun              = track.definition.environment.sunAngles
+        sunNode.eulerAngles  = SCNVector3(sun.x, sun.y, 0)
         scene.rootNode.addChildNode(sunNode)
 
         // Sky fill
@@ -131,21 +143,6 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
         let ambNode          = SCNNode()
         ambNode.light        = ambLight
         scene.rootNode.addChildNode(ambNode)
-    }
-
-    private func addGround() {
-        let floor            = SCNFloor()
-        floor.reflectivity   = 0
-        let mat              = SCNMaterial()
-        mat.diffuse.contents = UIColor(red: 0.28, green: 0.39, blue: 0.33, alpha: 1)
-        mat.roughness.contents = 1.0
-        floor.firstMaterial  = mat
-        let node             = SCNNode(geometry: floor)
-        node.position        = SCNVector3(0, -0.02, 0)
-        node.physicsBody     = SCNPhysicsBody(type: .static, shape: nil)
-        node.physicsBody?.categoryBitMask  = PhysicsCategory.track
-        node.physicsBody?.collisionBitMask = PhysicsCategory.car
-        scene.rootNode.addChildNode(node)
     }
 
     private func setupAudio() {
@@ -182,7 +179,7 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
     private func setupCamera() {
         camera               = SCNCamera()
         camera.fieldOfView   = 65
-        camera.zFar          = 600
+        camera.zFar          = 900
         camera.zNear         = 0.5
         camera.wantsHDR = false
         camera.wantsExposureAdaptation = false
@@ -233,6 +230,9 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
 
         // Step physics
         physics.update(dt: dt)
+        // Tilt the body onto hills and banking.
+        carNode.simdOrientation = simd_quatf(from: SIMD3<Float>(0, 1, 0), to: nearSample.up)
+            * carNode.simdOrientation
 
         // Wheel animation
         carNode?.animateWheels(speed: physics.speed, steer: steerInput, dt: dt)
@@ -255,7 +255,13 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
     // MARK: - Auto-drive (demo mode)
 
     private func updateAutoDrive(dt: Float, time: TimeInterval) {
-        let speed: Float = 45   // m/s ≈ 162 km/h
+        // Brake for corners: target speed from the tightest curvature in the next 80 m.
+        let here = Int(autoDriveProgress * Float(track.stepCount))
+        var maxCurv: Float = 0
+        for k in stride(from: 0, to: 40, by: 2) { maxCurv = max(maxCurv, abs(track.sample(at: here + k).curvature)) }
+        let target = min(46, sqrt(16 / max(maxCurv, 1e-4)))
+        autoDriveSpeed += max(-14 * dt, min(7 * dt, target - autoDriveSpeed))
+        let speed = autoDriveSpeed
         autoDriveProgress += dt * speed / track.totalLength
         if autoDriveProgress >= 1 { autoDriveProgress -= 1 }
 
@@ -265,12 +271,14 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
         let s0 = track.sample(at: idx)
         let s1 = track.sample(at: idx + 1)
 
-        let pos = s0.position + (s1.position - s0.position) * frac + SIMD3<Float>(0, 0.4, 0)
+        let up = simd_normalize(s0.up + (s1.up - s0.up) * frac)
+        let pos = s0.position + (s1.position - s0.position) * frac + up * 0.4
         let fwd = simd_normalize(s0.forward + (s1.forward - s0.forward) * frac)
         let heading = atan2(fwd.x, -fwd.z)
+        let right = simd_normalize(simd_cross(fwd, up))
 
         carNode.simdPosition = pos
-        carNode.simdEulerAngles = SIMD3<Float>(0, -heading, 0)
+        carNode.simdOrientation = simd_quatf(simd_float3x3(columns: (right, simd_cross(right, fwd), -fwd)))
         carNode.animateWheels(speed: speed, steer: 0, dt: dt)
 
         physics.position = pos
@@ -290,29 +298,32 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
 
     // MARK: - Camera
 
+    private var cameraYaw: Float?
+    private var cameraHeight: Float?
+
     private func updateCamera(dt: Float) {
-        let h   = physics.heading
-        let fwd = SIMD3<Float>(sin(h), 0, -cos(h))
+        // Smooth only yaw and height; a positional spring would trail further behind at speed.
+        var yaw = cameraYaw ?? physics.heading
+        let dYaw = remainder(physics.heading - yaw, 2 * Float.pi)
+        yaw += dYaw * min(1, 7 * dt)
+        cameraYaw = yaw
+        let fwd = SIMD3<Float>(sin(yaw), 0, -cos(yaw))
 
-        // CTR-style: farther back, higher, looking well ahead
-        let behind: Float = 16.0
-        let above:  Float = 7.5
-        let targetPos = physics.position - fwd * behind + SIMD3<Float>(0, above, 0)
+        // NFS3-style chase cam: low and tight behind the car, low enough for tunnels.
+        let behind: Float = 6.8
+        let above:  Float = 2.1
+        var targetPos = physics.position - fwd * behind + SIMD3<Float>(0, above, 0)
+        let roadBehind = track.sample(at: track.closestSampleIndex(to: targetPos)).position.y
+        targetPos.y = max(targetPos.y, roadBehind + above + 0.4)
+        let y = (cameraHeight ?? targetPos.y) + (targetPos.y - (cameraHeight ?? targetPos.y)) * min(1, 8 * dt)
+        cameraHeight = y
+        cameraNode.simdPosition = SIMD3(targetPos.x, y, targetPos.z)
 
-        // Spring follow (smoothing proportional to frame time)
-        let alpha: Float = min(1.0, 5.5 * dt)
-        let cur   = SIMD3<Float>(Float(cameraNode.position.x),
-                                  Float(cameraNode.position.y),
-                                  Float(cameraNode.position.z))
-        let next  = cur + (targetPos - cur) * alpha
-        cameraNode.simdPosition = next
-
-        // Look ahead of car (more forward offset gives road-preview feel)
-        let lookAt = physics.position + fwd * 14 + SIMD3<Float>(0, 0.6, 0)
+        // Aim just over the roof so the car sits in the lower third.
+        let lookAt = physics.position + fwd * 5 + SIMD3<Float>(0, 1.3, 0)
         cameraNode.simdLook(at: lookAt, up: SIMD3<Float>(0, 1, 0), localFront: SIMD3<Float>(0, 0, -1))
 
-        // Slight FOV boost at speed (Sega Rally "rushing" feel)
-        camera.fieldOfView = CGFloat(68 + physics.speed * 0.14)
+        camera.fieldOfView = CGFloat(62 + physics.speed * 0.1)
     }
 
     // MARK: - Lap detection

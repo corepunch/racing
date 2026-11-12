@@ -19,13 +19,15 @@ final class GameViewController: UIViewController {
         view.addSubview(scnView)
 
         // ── Game scene ────────────────────────────────────────────────────────
-        gameScene = GameScene()
-        // gameScene.autoDrive = true   // uncomment for demo mode
+        // Launch arguments: `-track <0...3>` picks a circuit, `-autoDrive YES` runs the demo.
+        let trackIndex = UserDefaults.standard.integer(forKey: "track")
+        gameScene = GameScene(definition: TrackLibrary.all[min(max(trackIndex, 0), TrackLibrary.all.count - 1)])
+        gameScene.autoDrive = UserDefaults.standard.bool(forKey: "autoDrive")
         scnView.scene     = gameScene.scene
         scnView.delegate  = gameScene
         scnView.isPlaying = true
         scnView.preferredFramesPerSecond = 60
-        scnView.antialiasingMode         = .multisampling4X
+        scnView.antialiasingMode         = .none
         scnView.showsStatistics          = false   // flip to true while tuning
 
         // ── SpriteKit HUD overlay ─────────────────────────────────────────────

@@ -50,27 +50,20 @@ struct PathSample {
     var arcLength: Float         // cumulative distance from sample[0]
     var surface: SurfaceType
     var halfWidth: Float         // road half-width in metres
+    var curvature: Float = 0     // signed 1/m, positive turning right
+    var zone: TrackDefinition.Zone.Kind? = nil
+    /// 0 at a tunnel portal, rising to 1 deep inside; 0 outside tunnels.
+    var tunnelDepth: Float = 0
+    /// 1 inside tunnels, fading to 0 over the approach cuttings.
+    var tunnelInfluence: Float = 0
+    var tunnelHill: Float = 0
+    /// 1 inside towns, fading to 0 over the outskirts.
+    var townInfluence: Float = 0
 }
 
 final class TrackPath {
 
-    // Closed loop Catmull-Rom control points.
-    // Roughly 350 × 300 m oval with chicanes — ~1 100 m lap at ~50 m/s average gives ~22 s.
-    static let controlPoints: [SIMD3<Float>] = [
-        SIMD3<Float>(   0,  0, -175),
-        SIMD3<Float>(  90,  0, -155),
-        SIMD3<Float>( 165,  0,  -95),
-        SIMD3<Float>( 185,  0,    0),
-        SIMD3<Float>( 165,  0,   95),
-        SIMD3<Float>(  90,  0,  155),
-        SIMD3<Float>(   0,  0,  175),
-        SIMD3<Float>( -75,  0,  155),
-        SIMD3<Float>(-160,  0,   75),
-        SIMD3<Float>(-200,  0,  -20),
-        SIMD3<Float>(-160,  0, -105),
-        SIMD3<Float>( -75,  0, -155),
-    ]
-
+    let definition: TrackDefinition
     let samples: [PathSample]
     let totalLength: Float
     let stepCount: Int
@@ -79,61 +72,121 @@ final class TrackPath {
     let boundsMin: SIMD2<Float>
     let boundsMax: SIMD2<Float>
 
-    init(stepCount: Int = 512) {
-        self.stepCount = stepCount
-
-        var built = [PathSample]()
-        built.reserveCapacity(stepCount)
-
-        var cumDist: Float = 0
-        let pts = Self.controlPoints
+    /// Resamples the closed Catmull-Rom loop at uniform arc length (`spacing` metres).
+    init(definition: TrackDefinition = TrackLibrary.all[0], spacing: Float = 2) {
+        self.definition = definition
+        let pts = definition.controlPoints
         let n = pts.count
 
-        for i in 0..<stepCount {
-            let t     = Float(i) / Float(stepCount) * Float(n)
-            let seg   = Int(t) % n
-            let u     = t - floor(t)
-            let p0    = pts[(seg - 1 + n) % n]
-            let p1    = pts[seg]
-            let p2    = pts[(seg + 1) % n]
-            let p3    = pts[(seg + 2) % n]
+        // Dense evaluation for arc-length parameterisation.
+        let dense = n * 64
+        var densePos = [SIMD3<Float>]()
+        var denseLen = [Float]()
+        densePos.reserveCapacity(dense + 1)
+        var acc: Float = 0
+        for i in 0...dense {
+            let t = Float(i) / Float(dense) * Float(n)
+            let seg = Int(t) % n
+            let u = i == dense ? 0 : t - floor(t)
+            let p = catmullRom(pts[(seg - 1 + n) % n], pts[seg], pts[(seg + 1) % n], pts[(seg + 2) % n], u)
+            if let last = densePos.last { acc += simd_length(p - last) }
+            densePos.append(p)
+            denseLen.append(acc)
+        }
+        let length = acc
+        let count = max(64, Int((length / spacing).rounded()))
+        let step = length / Float(count)
+        self.stepCount = count
+        self.totalLength = length
 
-            let pos   = catmullRom(p0, p1, p2, p3, u)
-            var tan   = catmullRomTangent(p0, p1, p2, p3, u)
-            if simd_length(tan) < 1e-6 { tan = SIMD3<Float>(0, 0, 1) }
-            let fwd   = simd_normalize(tan)
-            let worldUp = SIMD3<Float>(0, 1, 0)
-            let right = simd_normalize(simd_cross(fwd, worldUp))
-            let up    = simd_normalize(simd_cross(right, fwd))
+        var positions = [SIMD3<Float>]()
+        positions.reserveCapacity(count)
+        var j = 0
+        for i in 0..<count {
+            let target = Float(i) * step
+            while j < dense - 1 && denseLen[j + 1] < target { j += 1 }
+            let segLen = max(denseLen[j + 1] - denseLen[j], 1e-5)
+            let f = (target - denseLen[j]) / segLen
+            positions.append(densePos[j] + (densePos[j + 1] - densePos[j]) * f)
+        }
 
-            if !built.isEmpty {
-                cumDist += simd_length(pos - built.last!.position)
+        // Frames, curvature and zone data.
+        func at(_ i: Int) -> SIMD3<Float> { positions[((i % count) + count) % count] }
+        var forwards = [SIMD3<Float>](repeating: .zero, count: count)
+        var curvatures = [Float](repeating: 0, count: count)
+        for i in 0..<count {
+            forwards[i] = simd_normalize(at(i + 1) - at(i - 1))
+        }
+        for i in 0..<count {
+            let a = forwards[(i - 3 + count) % count], b = forwards[(i + 3) % count]
+            let ah = simd_normalize(SIMD2(a.x, a.z)), bh = simd_normalize(SIMD2(b.x, b.z))
+            let cross = ah.x * bh.y - ah.y * bh.x
+            curvatures[i] = asin(max(-1, min(1, cross))) / (6 * step)
+        }
+        // Smooth curvature so banking eases in and out.
+        for _ in 0..<4 {
+            var next = curvatures
+            for i in 0..<count {
+                var s: Float = 0
+                for k in -4...4 { s += curvatures[((i + k) % count + count) % count] }
+                next[i] = s / 9
             }
+            curvatures = next
+        }
 
-            let progress = Float(i) / Float(stepCount)
-            let surface: SurfaceType
-            switch progress {
-            case 0.00..<0.28: surface = .tarmac
-            case 0.28..<0.52: surface = .dirt
-            case 0.52..<0.68: surface = .gravel
-            case 0.68..<0.84: surface = .dirt
-            default:           surface = .tarmac
+        func lapDistance(_ a: Float, _ b: Float) -> Float {
+            let d = abs(a - b).truncatingRemainder(dividingBy: length)
+            return min(d, length - d)
+        }
+
+        var built = [PathSample]()
+        built.reserveCapacity(count)
+        for i in 0..<count {
+            let progress = Float(i) / Float(count)
+            let arc = Float(i) * step
+            let fwd = forwards[i]
+            let flatRight = simd_normalize(simd_cross(fwd, SIMD3<Float>(0, 1, 0)))
+            let bank = max(-0.14, min(0.14, curvatures[i] * 14 * definition.banking))
+            let q = simd_quatf(angle: bank, axis: fwd)
+            let right = q.act(flatRight)
+            let up = simd_normalize(simd_cross(right, fwd))
+
+            var sample = PathSample(
+                position: positions[i], forward: fwd, right: right, up: up,
+                arcLength: arc, surface: definition.surface(at: progress),
+                halfWidth: definition.halfWidth, curvature: curvatures[i])
+
+            for zone in definition.zones {
+                let zs = zone.start * length, ze = zone.end * length
+                let inside = progress >= zone.start && progress < zone.end
+                let edge = min(lapDistance(arc, zs), lapDistance(arc, ze))
+                switch zone.kind {
+                case .tunnel:
+                    if inside {
+                        sample.zone = .tunnel
+                        sample.tunnelDepth = smoothstep(0, 45, edge)
+                        sample.tunnelInfluence = 1
+                        sample.tunnelHill = zone.hill
+                    } else if edge < 90 {
+                        let f = 1 - smoothstep(0, 90, edge)
+                        if f > sample.tunnelInfluence {
+                            sample.tunnelInfluence = f
+                            sample.tunnelHill = zone.hill
+                        }
+                    }
+                case .town:
+                    if inside {
+                        sample.zone = .town
+                        sample.townInfluence = 1
+                    } else {
+                        sample.townInfluence = max(sample.townInfluence, 1 - smoothstep(0, 60, edge))
+                    }
+                }
             }
-
-            built.append(PathSample(
-                position: pos,
-                forward: fwd,
-                right: right,
-                up: up,
-                arcLength: cumDist,
-                surface: surface,
-                halfWidth: 5.5
-            ))
+            built.append(sample)
         }
 
         samples = built
-        // Close the loop distance
-        totalLength = cumDist + (built.count > 1 ? simd_length(built.last!.position - built.first!.position) : 0)
 
         // Compute XZ bounds for minimap
         var minX = Float.greatestFiniteMagnitude, minZ = Float.greatestFiniteMagnitude
@@ -183,17 +236,5 @@ private func catmullRom(
         (-p0 + p2) * t +
         (2*p0 - 5*p1 + 4*p2 - p3) * t2 +
         (-p0 + 3*p1 - 3*p2 + p3) * t3
-    )
-}
-
-private func catmullRomTangent(
-    _ p0: SIMD3<Float>, _ p1: SIMD3<Float>,
-    _ p2: SIMD3<Float>, _ p3: SIMD3<Float>, _ t: Float
-) -> SIMD3<Float> {
-    let t2 = t * t
-    return 0.5 * (
-        (-p0 + p2) +
-        2 * (2*p0 - 5*p1 + 4*p2 - p3) * t +
-        3 * (-p0 + 3*p1 - 3*p2 + p3) * t2
     )
 }
