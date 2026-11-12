@@ -12,7 +12,7 @@ ios-build:
 	@xcodebuild -project Racing.xcodeproj -scheme Racing -configuration Debug \
 		-sdk iphoneos -derivedDataPath "$(BUILD_DIR)/DerivedData" \
 		SYMROOT="$(BUILD_DIR)/products" OBJROOT="$(BUILD_DIR)/intermediates" \
-		CODE_SIGNING_ALLOWED=NO build
+		CODE_SIGNING_ALLOWED=NO ENABLE_DEBUG_DYLIB=NO build
 
 ios-devices:
 	@xcrun devicectl list devices --timeout 15

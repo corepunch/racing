@@ -116,7 +116,7 @@ def main():
         entitlements_path.write_bytes(plistlib.dumps(entitlements))
         subprocess.run(['codesign', '--force', '--sign', identity, '--entitlements', str(entitlements_path),
                         '--generate-entitlement-der', str(app)], check=True)
-    subprocess.run(['codesign', '--verify', '--strict', str(app)], check=True)
+    subprocess.run(['codesign', '--verify', '--deep', '--strict', str(app)], check=True)
 
     command = ['xcrun', 'devicectl', 'device']
     target = ['--device', device['identifier']]
