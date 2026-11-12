@@ -264,6 +264,7 @@ enum TerrainBuilder {
                     }
                 }
                 let node = SCNNode(geometry: mb.geometry(materials: [material]))
+                PhysicsCategory.addStaticMesh(to: node, category: PhysicsCategory.terrain)
                 root.addChildNode(node)
             }
         }

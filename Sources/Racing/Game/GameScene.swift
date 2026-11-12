@@ -220,18 +220,18 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
         // Surface lookup
         let sampleIdx    = track.closestSampleIndex(to: physics.position)
         let nearSample   = track.sample(at: sampleIdx)
-        physics.surface  = nearSample.surface
-
-        // Keep car at road height (simple Y projection from closest sample)
-        physics.position.y = nearSample.position.y + 0.4
+        let offset = physics.position - nearSample.position
+        let lateral = abs(simd_dot(SIMD3(offset.x, 0, offset.z),
+                                   simd_normalize(SIMD3(nearSample.right.x, 0, nearSample.right.z))))
+        physics.surface  = lateral > nearSample.halfWidth + 2 ? .gravel : nearSample.surface
 
         // Lap detection
         checkLap(sampleIdx: sampleIdx, time: time)
 
         // Step physics
-        physics.update(dt: dt)
-        // Tilt the body onto hills and banking.
-        carNode.simdOrientation = simd_quatf(from: SIMD3<Float>(0, 1, 0), to: nearSample.up)
+        physics.update(dt: dt, world: scene.physicsWorld)
+        // Align to the actual surface under the car, including off-road terrain.
+        carNode.simdOrientation = simd_quatf(from: SIMD3<Float>(0, 1, 0), to: physics.groundNormal)
             * carNode.simdOrientation
 
         // Wheel animation
@@ -247,7 +247,7 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
         displaySpeed    = physics.speedKMH
         displayLap      = lapCount
         displayLapTime  = time - lapStartTime
-        displaySurface  = nearSample.surface
+        displaySurface  = physics.surface
         displayDrifting = physics.isDrifting
         carWorldPos     = physics.position
     }
@@ -313,8 +313,12 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
         let behind: Float = 6.8
         let above:  Float = 2.1
         var targetPos = physics.position - fwd * behind + SIMD3<Float>(0, above, 0)
-        let roadBehind = track.sample(at: track.closestSampleIndex(to: targetPos)).position.y
-        targetPos.y = max(targetPos.y, roadBehind + above + 0.4)
+        let ground = scene.physicsWorld.rayTestWithSegment(
+            from: SCNVector3(targetPos.x, targetPos.y + 2, targetPos.z),
+            to: SCNVector3(targetPos.x, targetPos.y - 100, targetPos.z),
+            options: [.collisionBitMask: PhysicsCategory.track | PhysicsCategory.terrain,
+                      .searchMode: SCNPhysicsWorld.TestSearchMode.closest, .backfaceCulling: false])
+        if let hit = ground.first { targetPos.y = max(targetPos.y, Float(hit.worldCoordinates.y) + above) }
         let y = (cameraHeight ?? targetPos.y) + (targetPos.y - (cameraHeight ?? targetPos.y)) * min(1, 8 * dt)
         cameraHeight = y
         cameraNode.simdPosition = SIMD3(targetPos.x, y, targetPos.z)

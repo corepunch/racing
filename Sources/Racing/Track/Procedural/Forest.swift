@@ -160,6 +160,7 @@ enum ForestBuilder {
         }
         let node = SCNNode(geometry: mb.geometry(materials: [material]))
         node.name = "forestWalls"
+        PhysicsCategory.addStaticMesh(to: node, category: PhysicsCategory.obstacle)
         return node
     }
 
@@ -173,7 +174,7 @@ enum ForestBuilder {
         let chunkSize: Float = 160
         let spacing: Float = 6
         let lo = path.boundsMin - 320, hi = path.boundsMax + 320
-        var chunks = [SIMD2<Int>: (mb: MeshBuilder, top: Float)]()
+        var chunks = [SIMD2<Int>: (mb: MeshBuilder, trunks: MeshBuilder, top: Float, trunkCount: Int)]()
 
         var z = lo.y
         while z < hi.y {
@@ -205,13 +206,21 @@ enum ForestBuilder {
                 let (ul, ur) = rng.float() < 0.5 ? (u0, u1) : (u1, u0)
 
                 let key = SIMD2(Int((px / chunkSize).rounded(.down)), Int((pz / chunkSize).rounded(.down)))
-                var chunk = chunks[key] ?? (MeshBuilder(materialCount: 1, secondUV: true), 0)
+                var chunk = chunks[key] ?? (MeshBuilder(materialCount: 1, secondUV: true), MeshBuilder(materialCount: 1), 0, 0)
                 let n = SIMD3<Float>(0, 1, 0)
                 let a = chunk.mb.vertex(base, n, SIMD2(ul, v1), uv2: SIMD2(-w / 2, 0))
                 let b = chunk.mb.vertex(base, n, SIMD2(ur, v1), uv2: SIMD2(w / 2, 0))
                 let c = chunk.mb.vertex(base, n, SIMD2(ur, v0), uv2: SIMD2(w / 2, h))
                 let e = chunk.mb.vertex(base, n, SIMD2(ul, v0), uv2: SIMD2(-w / 2, h))
                 chunk.mb.quad(0, a, b, c, e)
+                // Billboards turn to face the camera; a small fixed trunk gives trees a
+                // stable, solid footprint without treating their transparent canopy as a wall.
+                if h >= 4 {
+                    let trunkWidth = min(1.2, max(0.5, h * 0.065))
+                    chunk.trunks.box(0, origin: base, basis: matrix_identity_float3x3,
+                                     size: SIMD3(trunkWidth, max(2, h * 0.45), trunkWidth))
+                    chunk.trunkCount += 1
+                }
                 chunk.top = max(chunk.top, h)
                 chunks[key] = chunk
             }
@@ -227,6 +236,14 @@ enum ForestBuilder {
             let pad = chunk.top
             geo.boundingBox = (SCNVector3(mn.x - pad, mn.y, mn.z - pad), SCNVector3(mx.x + pad, mx.y + pad, mx.z + pad))
             root.addChildNode(SCNNode(geometry: geo))
+            if chunk.trunkCount > 0 {
+                let trunks = SCNNode(geometry: chunk.trunks.geometry(materials: [SCNMaterial()]))
+                // Hidden SceneKit nodes do not participate in physics queries.
+                trunks.opacity = 0
+                trunks.castsShadow = false
+                PhysicsCategory.addStaticMesh(to: trunks, category: PhysicsCategory.obstacle)
+                root.addChildNode(trunks)
+            }
         }
         return root
     }

@@ -149,6 +149,7 @@ enum RaceProps {
 
         let node = SCNNode(geometry: mb.geometry(materials: [steel, darkSteel, bannerMat, lamp, line]))
         node.name = "startGantry"
+        PhysicsCategory.addStaticMesh(to: node, category: PhysicsCategory.obstacle)
         return node
     }
 
@@ -185,6 +186,7 @@ enum RaceProps {
         }
         let node = SCNNode(geometry: mb.geometry(materials: [steel, cloth]))
         node.name = "startFlag"
+        PhysicsCategory.addStaticMesh(to: node, category: PhysicsCategory.obstacle)
         return node
     }
 
@@ -281,6 +283,7 @@ enum RaceProps {
 
         let node = SCNNode(geometry: mb.geometry(materials: [concrete, seat, steel, roof, ads]))
         node.name = "grandstand"
+        PhysicsCategory.addStaticMesh(to: node, category: PhysicsCategory.obstacle)
         return node
     }
 }

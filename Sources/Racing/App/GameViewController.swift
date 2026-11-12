@@ -8,6 +8,7 @@ final class GameViewController: UIViewController {
     private var gameScene: GameScene!
     private var hudScene: HUDScene!
     private var controlsView: InputView!
+    private var inputManager: InputManager!
     private var hudTimer: Timer?
 
     override func viewDidLoad() {
@@ -59,15 +60,14 @@ final class GameViewController: UIViewController {
         hudScene.buildMinimapPath(trackPath: gameScene.track)
         scnView.overlaySKScene = hudScene
 
-        // ── On-screen controls ────────────────────────────────────────────────
+        // ── Keyboard and game controllers ────────────────────────────────────
         controlsView = InputView(frame: view.bounds)
         controlsView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        controlsView.onSteer    = { [weak self] v in self?.gameScene.steerInput    = v }
-        controlsView.onThrottle = { [weak self] v in self?.gameScene.throttleInput = v }
-        controlsView.onBrake    = { [weak self] v in self?.gameScene.brakeInput    = v }
         view.addSubview(controlsView)
-
         controlsView.becomeFirstResponder()
+        inputManager = InputManager()
+        NotificationCenter.default.addObserver(self, selector: #selector(resetInput),
+                                               name: UIApplication.willResignActiveNotification, object: nil)
 
         // ── HUD polling timer ─────────────────────────────────────────────────
         hudTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
@@ -77,6 +77,10 @@ final class GameViewController: UIViewController {
 
     private func pollHUD() {
         guard let gs = gameScene, let hud = hudScene else { return }
+        let input = inputManager.state()
+        gs.steerInput = controlsView.steer != 0 ? controlsView.steer : input.steer
+        gs.throttleInput = max(controlsView.throttle, input.throttle)
+        gs.brakeInput = max(controlsView.brake, input.brake)
         hud.updateHUD(
             speed:    gs.displaySpeed,
             lap:      gs.displayLap,
@@ -86,6 +90,13 @@ final class GameViewController: UIViewController {
             carPos:   gs.carWorldPos,
             trackPath: gs.track
         )
+    }
+
+    @objc private func resetInput() {
+        controlsView?.reset()
+        gameScene?.steerInput = 0
+        gameScene?.throttleInput = 0
+        gameScene?.brakeInput = 0
     }
 
     override var supportedInterfaceOrientations: UIInterfaceOrientationMask { .landscape }

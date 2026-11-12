@@ -184,6 +184,7 @@ enum TrackScenery {
 
         let node = SCNNode(geometry: mb.geometry(materials: [wall, lamp, portal, stripe]))
         node.name = "tunnel"
+        PhysicsCategory.addStaticMesh(to: node, category: PhysicsCategory.obstacle)
 
         // Earth cover over the tube so the mountain reads as continuous from outside.
         var cover = MeshBuilder(materialCount: 1)
@@ -241,6 +242,7 @@ enum TrackScenery {
         }
         let node = SCNNode(geometry: mb.geometry(materials: [metal, postMat]))
         node.name = "guardrails"
+        PhysicsCategory.addStaticMesh(to: node, category: PhysicsCategory.obstacle)
         return node
     }
 
@@ -465,6 +467,7 @@ enum TrackScenery {
 
         let node = SCNNode(geometry: mb.geometry(materials: materials))
         node.name = "town"
+        PhysicsCategory.addStaticMesh(to: node, category: PhysicsCategory.obstacle)
         return node
     }
 }
