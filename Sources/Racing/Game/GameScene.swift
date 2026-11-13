@@ -3,9 +3,10 @@ import simd
 
 struct RaceConfig {
     var definition: TrackDefinition
-    var shipIndex = 0
+    var carIndex = 0
     var laps = 3
-    /// The wall-guard pilot assist (see `Ship.guardYaw`).
+    /// Driver assist: slows the car for corners it is too fast for and leans it away from
+    /// a barrier at the last moment (`Car.guardSteer`). It never steers along the road.
     var assist = true
     /// 0 easy, 1 normal, 2 hard.
     var difficulty = 1
@@ -64,7 +65,7 @@ enum Records {
     }
 }
 
-/// Owns the scene, the ships, the camera and the race itself. The per-frame loop
+/// Owns the scene, the cars, the camera and the race itself. The per-frame loop
 /// runs from SceneKit's render callback.
 final class GameScene: NSObject, SCNSceneRendererDelegate {
 
@@ -72,8 +73,8 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
     let track: TrackPath
     let config: RaceConfig
 
-    private(set) var ships: [Ship] = []
-    private var player: Ship { ships[0] }
+    private(set) var cars: [Car] = []
+    private var player: Car { cars[0] }
     private var lapsDone: [Int] = []
     private var laneTimers: [Float] = []
     private var boostSections: [Bool] = []
@@ -88,13 +89,22 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
     var steerInput: Float = 0
     var brakeInput: Float = 0
 
-    /// Demo: every ship is flown by the rival driver, no countdown, no finish.
-    var autoDrive = false { didSet { if autoDrive { phase = .racing } } }
+    /// Demo for the track recorder: the player's car glides round the lap, no race.
+    var autoDrive = false {
+        didSet {
+            guard autoDrive else { return }
+            phase = .racing
+            player.setDemo(true)
+            for rival in cars.dropFirst() { rival.node.isHidden = true }
+        }
+    }
+    private var demoDistance: Float = 0
+    private var demoSpeed: Float = 30
     /// Debug stand-ins for the player, with telemetry printed every two seconds (`-driver <name>`).
     enum DebugDriver: String {
-        /// The rival driver flies the player's ship.
+        /// The rival driver drives the player's car.
         case rival
-        /// Nobody touches the screen: shows what the ship and the assist do on their own.
+        /// Nobody touches the screen: shows what the car and the assist do on their own.
         case handsOff = "handsoff"
         /// A casual thumb: steers a quarter of a second late and never brakes.
         case casual
@@ -165,12 +175,15 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
         scene.rootNode.addChildNode(CityScenery.build(path: track))
         boostSections = TrackSections.plan(path: track).map { $0.deck == .boost }
 
-        // The player's ship first, then every other design as a rival.
-        let roster = ShipRoster.all
-        let chosen = min(max(config.shipIndex, 0), roster.count - 1)
+        // The player's car first, then every other design as a rival.
+        let roster = CarRoster.all
+        let chosen = min(max(config.carIndex, 0), roster.count - 1)
         let order = [chosen] + roster.indices.filter { $0 != chosen }
-        ships = order.map { Ship(design: roster[$0]) }
-        ships.forEach { scene.rootNode.addChildNode($0.node) }
+        cars = order.map { Car(design: roster[$0]) }
+        for car in cars {
+            scene.rootNode.addChildNode(car.node)
+            car.install(in: scene.physicsWorld)
+        }
 
         setupCamera()
     }
@@ -178,15 +191,16 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
     /// Puts everyone back on the grid and starts the countdown.
     func restart() {
         lock.lock(); events.removeAll(); lock.unlock()
-        let count = ships.count
-        let lanes: [Float] = [-4.5, 4.5, -1.6, 1.6, 0, -3]
+        let count = cars.count
+        let lanes: [Float] = [-3, 3, -1.2, 1.2, 0, -2]
         let basePace: Float = [0.9, 0.95, 1.0][min(max(config.difficulty, 0), 2)]
-        for (i, ship) in ships.enumerated() {
+        for (i, car) in cars.enumerated() {
             // Rivals fill the front of the grid; the player starts at the back.
             let slot = i == 0 ? count - 1 : i - 1
-            ship.place(progress: -(10 + 7 * Float(slot)), lateral: slot % 2 == 0 ? -3.2 : 3.2, on: track)
-            ship.lane = i == 0 ? 0 : lanes[(i - 1) % lanes.count]
-            ship.pace = i == 0 ? 1 : basePace - 0.012 * Float(i - 1)
+            car.place(progress: -(10 + 7 * Float(slot)), lateral: slot % 2 == 0 ? -3.2 : 3.2, on: track)
+            car.lane = i == 0 ? 0 : lanes[(i - 1) % lanes.count]
+            car.pace = i == 0 ? 1 : basePace - 0.012 * Float(i - 1)
+            car.skill = i == 0 ? 1 : [0.6, 0.78, 1.0][min(max(config.difficulty, 0), 2)]
         }
         lapsDone = Array(repeating: 0, count: count)
         laneTimers = (0..<count).map { 3 + Float($0) * 1.7 }
@@ -266,10 +280,17 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
         lastTime = time
         guard dt > 0 else { return }
 
+        if autoDrive {
+            updateDemo(dt: dt)
+            updateCamera(dt: dt)
+            publishHUD()
+            return
+        }
+
         switch phase {
         case .countdown(let left):
             let now = left - dt
-            for ship in ships { ship.step(dt: dt, input: ShipInput(), track: track, throttle: 0) }
+            for car in cars { car.step(dt: dt, input: CarInput(), track: track, hold: true) }
             if Int(ceil(now)) != Int(ceil(left)), now > 0, now <= 3 { emit(.countdown(Int(ceil(now)))) }
             if now <= 0 {
                 phase = .racing
@@ -279,7 +300,7 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
             }
         case .racing, .finished:
             raceTime += dt
-            stepShips(dt: dt)
+            stepCars(dt: dt)
         }
 
         updateCamera(dt: dt)
@@ -287,118 +308,112 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
         if debugDriver != nil { printTelemetry(dt: dt) }
     }
 
+    // MARK: - Demo
+
+    /// The track recorder's drive-through: along the centre line, slowing for corners.
+    private func updateDemo(dt: Float) {
+        var tightest: Float = 0
+        for k in stride(from: Float(0), to: 200, by: 4) { tightest = max(tightest, abs(track.frame(at: demoDistance + k).curvature)) }
+        let target = min(player.design.spec.topSpeed, (34 / max(tightest, 1e-4)).squareRoot())
+        demoSpeed += max(-34 * dt, min(16 * dt, target - demoSpeed))
+        demoDistance += demoSpeed * dt
+        player.glide(to: demoDistance, speed: demoSpeed, track: track)
+    }
+
     // MARK: - Race
 
-    private func stepShips(dt: Float) {
+    private func stepCars(dt: Float) {
         let length = track.totalLength
         let playerFinished = player.finishTime != nil
 
-        for (i, ship) in ships.enumerated() {
-            let human = i == 0 && !autoDrive && debugDriver != .rival && !playerFinished
+        for (i, car) in cars.enumerated() {
+            let human = i == 0 && debugDriver != .rival && !playerFinished
             if human {
-                var input = ShipInput(steer: steerInput, brake: brakeInput)
-                if debugDriver == .handsOff { input = ShipInput() }
+                var input = CarInput(steer: steerInput, brake: brakeInput)
+                if debugDriver == .handsOff { input = CarInput() }
                 if debugDriver == .casual {
-                    steerHistory.append(RivalDriver.input(for: ship, track: track).steer)
+                    steerHistory.append(RivalDriver.input(for: car, track: track).steer)
                     if steerHistory.count > 15 { steerHistory.removeFirst() }
-                    input = ShipInput(steer: steerHistory[0], brake: 0)
+                    input = CarInput(steer: steerHistory[0], brake: 0)
                 }
-                ship.step(dt: dt, input: input, track: track,
+                // The assist also lifts and brakes for corners that are too tight for this speed.
+                // It leaves the steering alone.
+                if config.assist {
+                    let limit = RivalDriver.cornerSpeed(for: car, track: track, grip: 62)
+                    if car.speed > limit { input.throttle = 0 }
+                    if car.speed > limit + 5 { input.brake = max(input.brake, 0.7) }
+                }
+                car.step(dt: dt, input: input, track: track,
                           wallGuard: config.assist ? 1 : 0)
             } else {
                 updateRival(i, dt: dt)
-                // A finished ship cruises its lap of honour.
-                let throttle: Float = ship.finishTime != nil ? 0.6 : 1
-                ship.step(dt: dt, input: RivalDriver.input(for: ship, track: track), track: track, throttle: throttle)
+                car.step(dt: dt, input: RivalDriver.input(for: car, track: track), track: track)
             }
 
             // Boost pads cover the middle of the deck.
-            let section = Int(ship.s / track.step) / TrackPath.sectionSamples
-            if boostSections[section % boostSections.count], abs(ship.d) < 0.44 * track.frame(at: ship.s).halfWidth {
-                ship.giveBoost()
+            let section = Int(car.s / track.step) / TrackPath.sectionSamples
+            if boostSections[section % boostSections.count], abs(car.d) < 0.44 * track.frame(at: car.s).halfWidth {
+                car.giveBoost()
             }
 
             if i == 0 {
-                if ship.pendingHit > 0 { emit(.wallHit(ship.pendingHit)); spark(at: ship); telemetryHits += 1 }
-                if ship.pendingBoost { emit(.boost) }
-                if ship.scraping { telemetryScrape += dt }
+                if car.pendingHit > 0 { emit(.wallHit(car.pendingHit)); spark(at: car); telemetryHits += 1 }
+                if car.pendingBoost { emit(.boost) }
+                if car.scraping { telemetryScrape += dt }
             }
-            ship.pendingHit = 0
-            ship.pendingBoost = false
+            car.pendingHit = 0
+            car.pendingBoost = false
 
             // Laps.
-            let done = Int((ship.progress / length).rounded(.down))
-            if done > lapsDone[i], ship.finishTime == nil {
+            let done = Int((car.progress / length).rounded(.down))
+            if done > lapsDone[i], car.finishTime == nil {
                 lapsDone[i] = done
-                let lapTime = raceTime - ship.lapStart
-                ship.lapStart = raceTime
-                ship.lastLap = lapTime
-                let best = ship.bestLap.map { lapTime < $0 } ?? true
-                if best { ship.bestLap = lapTime }
-                if !autoDrive, done >= config.laps { ship.finishTime = raceTime }
-                if i == 0, !autoDrive {
+                let lapTime = raceTime - car.lapStart
+                car.lapStart = raceTime
+                car.lastLap = lapTime
+                let best = car.bestLap.map { lapTime < $0 } ?? true
+                if best { car.bestLap = lapTime }
+                // A finished car cruises its lap of honour.
+                if done >= config.laps { car.finishTime = raceTime; car.pace = 0.55 }
+                if i == 0 {
                     emit(.lap(time: lapTime, best: best, lapsLeft: config.laps - done))
-                    if ship.finishTime != nil { finishRace() }
+                    if car.finishTime != nil { finishRace() }
                 }
             }
         }
-        collideShips()
     }
 
     /// Lane choice, traffic and a little rubber band for rival `i`.
     private func updateRival(_ i: Int, dt: Float) {
-        let ship = ships[i]
+        let car = cars[i]
         let length = track.totalLength
         laneTimers[i] -= dt
         if laneTimers[i] <= 0 {
             laneTimers[i] = rng.float(4...9)
-            ship.lane = rng.float(-5...5)
+            car.lane = rng.float(-3.5...3.5)
         }
-        // Pull out from behind a slower ship.
+        // Pull out from behind a slower car.
         var wanted: Float = 0
-        for other in ships where other !== ship {
-            var gap = other.s - ship.s
+        for other in cars where other !== car {
+            var gap = other.s - car.s
             if gap < -length / 2 { gap += length }
-            if gap > 0, gap < 28, abs(other.d - ship.d) < 3, other.speed < ship.speed + 2 {
-                wanted = other.d > ship.d ? -3.6 : 3.6
+            if gap > 0, gap < 34, abs(other.d - car.d) < 3.4, other.speed < car.speed + 2 {
+                wanted = other.d > car.d ? -3.4 : 3.4
             }
         }
-        ship.avoid += (wanted - ship.avoid) * min(1, 2.5 * dt)
+        car.avoid += (wanted - car.avoid) * min(1, 2.5 * dt)
 
-        guard i != 0, !autoDrive else { return }
+        guard i != 0, car.finishTime == nil else { return }
         // Rubber band: rivals far ahead ease off a little, rivals far behind push.
         let basePace: Float = [0.9, 0.95, 1.0][min(max(config.difficulty, 0), 2)] - 0.012 * Float(i - 1)
-        let lead = ship.progress - player.progress
+        let lead = car.progress - player.progress
         let band = max(-0.035, min(0.035, -lead / 4000))
-        ship.pace += (basePace + band - ship.pace) * min(1, dt)
-    }
-
-    /// Ships shoulder each other apart; running into the back of one costs the speed difference.
-    private func collideShips() {
-        let length = track.totalLength
-        for a in 0..<ships.count {
-            for b in (a + 1)..<ships.count {
-                let first = ships[a], second = ships[b]
-                var along = first.s - second.s
-                if along > length / 2 { along -= length }
-                if along < -length / 2 { along += length }
-                let across = first.d - second.d
-                guard abs(along) < 4.8, abs(across) < 3.2 else { continue }
-                let push = (3.2 - abs(across)) / 2 * (across >= 0 ? 1 : -1)
-                let front = along > 0 ? first : second, rear = along > 0 ? second : first
-                var rearScale: Float = 0.995
-                if abs(along) > 2.4, rear.speed > front.speed {
-                    rearScale = max(0.9, front.speed / rear.speed)
-                }
-                first.nudge(lateral: push, speedScale: first === rear ? rearScale : 1)
-                second.nudge(lateral: -push, speedScale: second === rear ? rearScale : 1)
-            }
-        }
+        car.pace += (basePace + band - car.pace) * min(1, dt)
     }
 
     /// Finishers by time, then everyone else by distance covered.
-    private func ranking() -> [Ship] {
-        ships.sorted { a, b in
+    private func ranking() -> [Car] {
+        cars.sorted { a, b in
             switch (a.finishTime, b.finishTime) {
             case let (x?, y?): return x < y
             case (_?, nil): return true
@@ -434,13 +449,13 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
         state.laps = config.laps
         state.lap = min(config.laps, max(1, lapsDone.first.map { $0 + 1 } ?? 1))
         state.position = (order.firstIndex { $0 === player } ?? 0) + 1
-        state.count = ships.count
+        state.count = cars.count
         state.raceTime = player.finishTime ?? raceTime
         state.lapTime = raceTime - player.lapStart
         state.bestLap = player.bestLap
         state.boosting = player.boost > 0
         if case .racing = phase { state.racing = true }
-        state.dots = ships.reversed().map {
+        state.dots = cars.reversed().map {
             (track.minimapPosition(for: $0.worldPosition), $0.design.primary, $0 === player)
         }
         lock.lock(); hudState = state; lock.unlock()
@@ -455,7 +470,7 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
         }
     }()
 
-    private func spark(at ship: Ship) {
+    private func spark(at car: Car) {
         let system = SCNParticleSystem()
         system.particleImage = Self.sparkImage
         system.birthRate = 220
@@ -471,9 +486,9 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
         system.blendMode = .additive
         system.isAffectedByGravity = true
         system.isLightingEnabled = false
-        let frame = track.frame(at: ship.s)
+        let frame = track.frame(at: car.s)
         let emitter = SCNNode()
-        emitter.simdPosition = ship.worldPosition + frame.right * (ship.d > 0 ? 1.2 : -1.2)
+        emitter.simdPosition = car.worldPosition + frame.right * (car.d > 0 ? car.design.halfWidth : -car.design.halfWidth)
         emitter.addParticleSystem(system)
         scene.rootNode.addChildNode(emitter)
         emitter.runAction(.sequence([.wait(duration: 1), .removeFromParentNode()]))
@@ -482,28 +497,28 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
     // MARK: - Camera
 
     private func updateCamera(dt: Float) {
-        let ship = player
-        let frame = track.frame(at: ship.s)
-        // Follow the direction of travel, so a slide shows the ship turned across the view.
-        var forward = cameraForward ?? ship.worldForward
-        forward = simd_normalize(forward + (ship.worldForward - forward) * min(1, 6.5 * dt))
+        let car = player
+        let frame = track.frame(at: car.s)
+        // Follow the direction of travel, so a slide shows the car turned across the view.
+        var forward = cameraForward ?? car.worldForward
+        forward = simd_normalize(forward + (car.worldForward - forward) * min(1, 6.5 * dt))
         cameraForward = forward
         // Lean with the banking, but not all the way.
         let up = simd_normalize(simd_mix(SIMD3<Float>(0, 1, 0), frame.up, SIMD3(repeating: 0.65)))
 
-        let boosting: Float = ship.boost > 0 ? 1 : 0
-        let behind: Float = 13
-        let above: Float = 5.2
+        let boosting: Float = car.boost > 0 ? 1 : 0
+        let behind: Float = 9.5
+        let above: Float = 3.7
         // Mostly level, so a climb does not drop the camera on to the deck.
         let level = simd_normalize(SIMD3<Float>(forward.x, forward.y * 0.4, forward.z))
-        var position = ship.worldPosition - level * behind + up * above
+        var position = car.worldPosition - level * behind + up * above
         // Never dip under the deck behind a crest.
-        let back = track.frame(at: ship.s - behind)
+        let back = track.frame(at: car.s - behind)
         position.y = max(position.y, back.position.y + 1.6)
         cameraNode.simdPosition = position
-        cameraNode.simdLook(at: ship.worldPosition + forward * 16 + up * 0.6, up: up, localFront: SIMD3<Float>(0, 0, -1))
+        cameraNode.simdLook(at: car.worldPosition + forward * 14 + up * 0.8, up: up, localFront: SIMD3<Float>(0, 0, -1))
 
-        let fov = 66 + min(ship.speed, 120) * 0.15 + boosting * 7
+        let fov = 66 + min(car.speed, 120) * 0.15 + boosting * 7
         cameraFOV += (fov - cameraFOV) * (dt > 0 ? min(1, 4 * dt) : 1)
         camera.fieldOfView = CGFloat(cameraFOV)
     }
@@ -515,8 +530,8 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
         guard telemetryTime > 2 else { return }
         telemetryTime = 0
         let order = ranking()
-        let line = order.map { ship -> String in
-            String(format: "%@%@ %.0fm %.0fkm/h", ship === player ? "*" : "", ship.design.name, ship.progress, ship.speed * 3.6)
+        let line = order.map { car -> String in
+            String(format: "%@%@ %.0fm %.0fkm/h", car === player ? "*" : "", car.design.name, car.progress, car.speed * 3.6)
         }.joined(separator: " | ")
         print(String(format: "[race] t=%.0fs P%d %.0fm %.0fkm/h lap=%d last=%.1fs hits=%d scrape=%.0fs pads=%d len=%.0fm :: %@",
                      raceTime, (order.firstIndex { $0 === player } ?? 0) + 1, player.progress, player.speed * 3.6,

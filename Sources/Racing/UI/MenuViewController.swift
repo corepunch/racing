@@ -1,15 +1,15 @@
 import UIKit
 import SceneKit
 
-/// The whole front end on one screen, laid out for one thumb: swipe the ship,
+/// The whole front end on one screen, laid out for one thumb: swipe the car,
 /// swipe the circuit, tap the two options, hit RACE.
 final class MenuViewController: UIViewController {
 
-    private let ships = ShipRoster.all
+    private let cars = CarRoster.all
     private var tracks: [TrackDefinition] = []
     private var paths: [UInt64: TrackPath] = [:]
 
-    private var shipIndex = 0
+    private var carIndex = 0
     private var trackIndex = 0
     private var assist = true
     private var difficulty = 1
@@ -17,11 +17,11 @@ final class MenuViewController: UIViewController {
 
     private let preview = SCNView()
     private let turntable = SCNNode()
-    private var shipNode: SCNNode?
+    private var carNode: SCNNode?
 
-    private let shipName = UI.label("", UI.font(24, .black), .white)
-    private let shipClass = UI.label("", UI.font(11, .bold), UI.cyan)
-    private let shipCount = UI.label("", UI.digits(12, .semibold), UI.dim, align: .right)
+    private let carName = UI.label("", UI.font(24, .black), .white)
+    private let carClass = UI.label("", UI.font(11, .bold), UI.cyan)
+    private let carCount = UI.label("", UI.digits(12, .semibold), UI.dim, align: .right)
     private var bars: [StatBar] = []
 
     private let trackCard = UIView()
@@ -41,7 +41,7 @@ final class MenuViewController: UIViewController {
         view.backgroundColor = UI.ink
         let defaults = UserDefaults.standard
         defaults.register(defaults: ["menu.assist": true, "menu.difficulty": 1, "menu.sector": 1977])
-        shipIndex = min(max(defaults.integer(forKey: "menu.ship"), 0), ships.count - 1)
+        carIndex = min(max(defaults.integer(forKey: "menu.car"), 0), cars.count - 1)
         assist = defaults.bool(forKey: "menu.assist")
         difficulty = min(max(defaults.integer(forKey: "menu.difficulty"), 0), 2)
         sectorSeed = max(1, defaults.integer(forKey: "menu.sector"))
@@ -50,7 +50,7 @@ final class MenuViewController: UIViewController {
 
         buildPreview()
         buildLayout()
-        showShip(animated: false)
+        showCar(animated: false)
         showTrack()
         showOptions()
     }
@@ -63,14 +63,14 @@ final class MenuViewController: UIViewController {
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
-        // `-autostart YES` goes straight into a race; `-track`, `-ship`, `-seed`, `-laps`, `-driver`, `-autoDrive` refine it.
+        // `-autostart YES` goes straight into a race; `-track`, `-car`, `-seed`, `-laps`, `-driver`, `-autoDrive` refine it.
         let defaults = UserDefaults.standard
         guard !didAutostart, defaults.bool(forKey: "autostart") else { return }
         didAutostart = true
         var definition = tracks[min(max(defaults.integer(forKey: "track"), 0), tracks.count - 1)]
         if defaults.integer(forKey: "seed") > 0 { definition = TrackLibrary.generated(seed: UInt64(defaults.integer(forKey: "seed"))) }
         var config = RaceConfig(definition: definition)
-        config.shipIndex = defaults.integer(forKey: "ship")
+        config.carIndex = defaults.integer(forKey: "car")
         config.assist = assist
         config.difficulty = difficulty
         if defaults.integer(forKey: "laps") > 0 { config.laps = defaults.integer(forKey: "laps") }
@@ -80,7 +80,7 @@ final class MenuViewController: UIViewController {
         present(game, animated: false)
     }
 
-    // MARK: - Ship preview
+    // MARK: - Car preview
 
     private func buildPreview() {
         let scene = SCNScene()
@@ -102,19 +102,19 @@ final class MenuViewController: UIViewController {
         scene.rootNode.addChildNode(key)
 
         // Landing pad: a dark disc with two glowing rings.
-        let pad = SCNNode(geometry: SCNCylinder(radius: 4.2, height: 0.08))
+        let pad = SCNNode(geometry: SCNCylinder(radius: 3.6, height: 0.08))
         pad.geometry?.firstMaterial?.lightingModel = .physicallyBased
         pad.geometry?.firstMaterial?.diffuse.contents = UIColor(red: 0.05, green: 0.06, blue: 0.1, alpha: 1)
         pad.geometry?.firstMaterial?.metalness.contents = 0.9
         pad.geometry?.firstMaterial?.roughness.contents = 0.35
-        pad.position = SCNVector3(0, -0.9, 0)
+        pad.position = SCNVector3(0, -0.04, 0)
         scene.rootNode.addChildNode(pad)
-        for (radius, color) in [(CGFloat(4.0), UI.cyan), (CGFloat(2.6), UI.magenta)] {
+        for (radius, color) in [(CGFloat(3.45), UI.cyan), (CGFloat(2.3), UI.magenta)] {
             let ring = SCNNode(geometry: SCNTube(innerRadius: radius - 0.05, outerRadius: radius, height: 0.1))
             ring.geometry?.firstMaterial?.lightingModel = .constant
             ring.geometry?.firstMaterial?.diffuse.contents = UIColor.black
             ring.geometry?.firstMaterial?.emission.contents = color
-            ring.position = SCNVector3(0, -0.84, 0)
+            ring.position = SCNVector3(0, 0.02, 0)
             scene.rootNode.addChildNode(ring)
         }
 
@@ -124,8 +124,8 @@ final class MenuViewController: UIViewController {
         let camera = SCNNode()
         camera.camera = SCNCamera()
         camera.camera?.fieldOfView = 38
-        camera.position = SCNVector3(0, 3.0, 10.6)
-        camera.simdLook(at: SIMD3(0, 0, 0))
+        camera.position = SCNVector3(0, 3.3, 11.5)
+        camera.simdLook(at: SIMD3(0, 0.5, 0))
         scene.rootNode.addChildNode(camera)
 
         preview.scene = scene
@@ -143,13 +143,13 @@ final class MenuViewController: UIViewController {
         let title = UI.label("ARCLINE", UI.font(34, .black), .white, align: .center)
         let tag = UI.label("MAGLOCK LEAGUE  ·  SEASON 01", UI.font(10, .bold), UI.cyan, align: .center)
 
-        // Ship block.
-        let shipHead = UIStackView(arrangedSubviews: [shipName, shipCount])
-        shipHead.alignment = .lastBaseline
-        let shipBlock = UIStackView(arrangedSubviews: [shipClass, shipHead])
-        shipBlock.axis = .vertical
-        shipBlock.spacing = 1
-        bars = ShipSpec.statNames.map { StatBar(name: $0) }
+        // Car block.
+        let carHead = UIStackView(arrangedSubviews: [carName, carCount])
+        carHead.alignment = .lastBaseline
+        let carBlock = UIStackView(arrangedSubviews: [carClass, carHead])
+        carBlock.axis = .vertical
+        carBlock.spacing = 1
+        bars = CarSpec.statNames.map { StatBar(name: $0) }
         let statGrid = UIStackView(arrangedSubviews: bars)
         statGrid.axis = .vertical
         statGrid.spacing = 7
@@ -180,17 +180,17 @@ final class MenuViewController: UIViewController {
         let race = GlowButton("RACE", filled: true, size: 24)
         race.onTap = { [weak self] in self?.startRace() }
 
-        let lower = UIStackView(arrangedSubviews: [shipBlock, statGrid, trackCard, options, race])
+        let lower = UIStackView(arrangedSubviews: [carBlock, statGrid, trackCard, options, race])
         lower.axis = .vertical
         lower.spacing = 12
-        lower.setCustomSpacing(8, after: shipBlock)
+        lower.setCustomSpacing(8, after: carBlock)
         lower.setCustomSpacing(16, after: statGrid)
         lower.translatesAutoresizingMaskIntoConstraints = false
 
-        let shipPrev = arrow("chevron.left") { [weak self] in self?.stepShip(-1) }
-        let shipNext = arrow("chevron.right") { [weak self] in self?.stepShip(1) }
+        let carPrev = arrow("chevron.left") { [weak self] in self?.stepCar(-1) }
+        let carNext = arrow("chevron.right") { [weak self] in self?.stepCar(1) }
 
-        [preview, title, tag, lower, shipPrev, shipNext].forEach(view.addSubview)
+        [preview, title, tag, lower, carPrev, carNext].forEach(view.addSubview)
         NSLayoutConstraint.activate([
             title.topAnchor.constraint(equalTo: safe.topAnchor, constant: 4),
             title.centerXAnchor.constraint(equalTo: view.centerXAnchor),
@@ -206,10 +206,10 @@ final class MenuViewController: UIViewController {
             preview.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             preview.bottomAnchor.constraint(equalTo: lower.topAnchor, constant: -4),
 
-            shipPrev.leadingAnchor.constraint(equalTo: safe.leadingAnchor, constant: 6),
-            shipPrev.centerYAnchor.constraint(equalTo: preview.centerYAnchor, constant: 30),
-            shipNext.trailingAnchor.constraint(equalTo: safe.trailingAnchor, constant: -6),
-            shipNext.centerYAnchor.constraint(equalTo: shipPrev.centerYAnchor),
+            carPrev.leadingAnchor.constraint(equalTo: safe.leadingAnchor, constant: 6),
+            carPrev.centerYAnchor.constraint(equalTo: preview.centerYAnchor, constant: 30),
+            carNext.trailingAnchor.constraint(equalTo: safe.trailingAnchor, constant: -6),
+            carNext.centerYAnchor.constraint(equalTo: carPrev.centerYAnchor),
 
             trackCard.heightAnchor.constraint(equalToConstant: 118),
             trackStripe.leadingAnchor.constraint(equalTo: trackCard.leadingAnchor, constant: 44),
@@ -236,8 +236,8 @@ final class MenuViewController: UIViewController {
             race.heightAnchor.constraint(equalToConstant: 66),
         ])
 
-        // Swipes anywhere on the ship or the card change the selection.
-        for (target, action) in [(preview as UIView, #selector(swipeShip(_:))), (trackCard, #selector(swipeTrack(_:)))] {
+        // Swipes anywhere on the car or the card change the selection.
+        for (target, action) in [(preview as UIView, #selector(swipeCar(_:))), (trackCard, #selector(swipeTrack(_:)))] {
             for direction in [UISwipeGestureRecognizer.Direction.left, .right] {
                 let swipe = UISwipeGestureRecognizer(target: self, action: action)
                 swipe.direction = direction
@@ -262,13 +262,13 @@ final class MenuViewController: UIViewController {
 
     // MARK: - Selection
 
-    @objc private func swipeShip(_ swipe: UISwipeGestureRecognizer) { stepShip(swipe.direction == .left ? 1 : -1) }
+    @objc private func swipeCar(_ swipe: UISwipeGestureRecognizer) { stepCar(swipe.direction == .left ? 1 : -1) }
     @objc private func swipeTrack(_ swipe: UISwipeGestureRecognizer) { stepTrack(swipe.direction == .left ? 1 : -1) }
 
-    private func stepShip(_ delta: Int) {
-        shipIndex = (shipIndex + delta + ships.count) % ships.count
-        UserDefaults.standard.set(shipIndex, forKey: "menu.ship")
-        showShip(animated: true)
+    private func stepCar(_ delta: Int) {
+        carIndex = (carIndex + delta + cars.count) % cars.count
+        UserDefaults.standard.set(carIndex, forKey: "menu.car")
+        showCar(animated: true)
     }
 
     private func stepTrack(_ delta: Int) {
@@ -296,23 +296,25 @@ final class MenuViewController: UIViewController {
         showOptions()
     }
 
-    private func showShip(animated: Bool) {
-        let design = ships[shipIndex]
-        shipNode?.removeFromParentNode()
-        let node = ShipMesh.build(design)
-        ShipMesh.setThrust(0.3, on: node)
+    private func showCar(animated: Bool) {
+        let design = cars[carIndex]
+        carNode?.removeFromParentNode()
+        let node = CarMesh.build(design).node
+        CarMesh.setThrust(0.3, on: node)
         node.eulerAngles = SCNVector3(0, 0.6, 0)
+        let rest = SCNVector3(0, CarMesh.axleHeight, 0)
+        node.position = rest
         turntable.addChildNode(node)
-        shipNode = node
+        carNode = node
         if animated {
             node.opacity = 0
-            node.position = SCNVector3(0, 0.8, 0)
-            node.runAction(.group([.fadeIn(duration: 0.2), .move(to: SCNVector3Zero, duration: 0.25)]))
+            node.position = SCNVector3(0, 1.1, 0)
+            node.runAction(.group([.fadeIn(duration: 0.2), .move(to: rest, duration: 0.25)]))
         }
-        shipName.text = design.name
-        shipClass.text = design.className
-        shipClass.textColor = UI.color(design.glow)
-        shipCount.text = "\(shipIndex + 1) / \(ships.count)"
+        carName.text = design.name
+        carClass.text = design.className
+        carClass.textColor = UI.color(design.glow)
+        carCount.text = "\(carIndex + 1) / \(cars.count)"
         for (bar, value) in zip(bars, design.spec.ratings) { bar.set(value, color: UI.color(design.primary), animated: animated) }
     }
 
@@ -332,14 +334,14 @@ final class MenuViewController: UIViewController {
     }
 
     private func showOptions() {
-        assistButton.setTitleText("WALL GUARD  " + (assist ? "ON" : "OFF"))
+        assistButton.setTitleText("ASSIST  " + (assist ? "ON" : "OFF"))
         assistButton.alpha = assist ? 1 : 0.6
         rivalsButton.setTitleText("RIVALS  " + ["EASY", "NORMAL", "HARD"][difficulty])
     }
 
     private func startRace() {
         var config = RaceConfig(definition: tracks[trackIndex])
-        config.shipIndex = shipIndex
+        config.carIndex = carIndex
         config.assist = assist
         config.difficulty = difficulty
         preview.isPlaying = false

@@ -10,7 +10,7 @@ final class HUDView: UIView {
     private let unit = UI.label("KM/H", UI.font(10, .bold), UI.dim, align: .center)
     private let banner = UI.label("", UI.font(64, .black), .white, align: .center)
     private let note = UI.label("", UI.font(17, .heavy), UI.cyan, align: .center)
-    private let hint = UI.label("SLIDE TO STEER  ·  PULL DOWN TO AIRBRAKE", UI.font(11, .bold), UI.dim, align: .center)
+    private let hint = UI.label("SLIDE TO STEER  ·  PULL DOWN TO BRAKE", UI.font(11, .bold), UI.dim, align: .center)
     private let map = TrackMapView()
     private var noteToken = 0
     private var bannerToken = 0

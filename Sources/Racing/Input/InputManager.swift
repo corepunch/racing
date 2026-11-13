@@ -1,12 +1,12 @@
 import UIKit
 
-/// One-thumb control. Touch anywhere and slide: sideways steers, pulling down airbrakes.
-/// The ship accelerates on its own, so lifting the thumb just flies straight.
+/// One-thumb control. Touch anywhere and slide: sideways steers, pulling down brakes (and reverses from a standstill).
+/// The car accelerates on its own, so lifting the thumb just drives straight.
 /// Arrow keys do the same on a keyboard.
 final class InputView: UIView {
     /// Sideways travel for full lock, in points.
     private var steeringDistance: CGFloat { max(70, min(bounds.width * 0.3, 130)) }
-    /// Downward travel before the airbrake starts, and from there to full.
+    /// Downward travel before the brake starts, and from there to full.
     private let brakeDeadZone: CGFloat = 34
     private let brakeDistance: CGFloat = 90
     private var keys = Set<UIKeyboardHIDUsage>()

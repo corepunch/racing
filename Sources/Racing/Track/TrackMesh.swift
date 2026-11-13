@@ -249,6 +249,12 @@ enum TrackMeshBuilder {
 
         let node = SCNNode(geometry: mesh.geometry(materials: materials, skipping: [barrierSlot]))
         node.name = "trackMesh"
+        let body = SCNPhysicsBody(type: .static, shape: SCNPhysicsShape(
+            geometry: mesh.collisionGeometry(),
+            options: [.type: SCNPhysicsShape.ShapeType.concavePolyhedron]))
+        body.categoryBitMask = PhysicsCategory.track
+        body.collisionBitMask = PhysicsCategory.car
+        node.physicsBody = body
 
         let root = SCNNode()
         root.name = "trackRoot"

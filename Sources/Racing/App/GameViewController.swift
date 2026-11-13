@@ -193,7 +193,7 @@ final class GameViewController: UIViewController {
         again.onTap = { [weak self] in self?.restart() }
         let menu = GlowButton("MENU")
         menu.onTap = { [weak self] in self?.quit() }
-        // Let the ship cross the line on screen before the panel comes up.
+        // Let the car cross the line on screen before the panel comes up.
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
             guard let self = self, self.panel == nil else { return }
             self.show(PanelView(title: UI.ordinal(result.position),
