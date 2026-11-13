@@ -69,8 +69,15 @@ final class GameViewController: UIViewController {
         controlsView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         view.addSubview(controlsView)
         controlsView.becomeFirstResponder()
-        NotificationCenter.default.addObserver(self, selector: #selector(resetInput),
-                                               name: UIApplication.willResignActiveNotification, object: nil)
+        let center = NotificationCenter.default
+        center.addObserver(self, selector: #selector(suspend),
+                           name: UIApplication.willResignActiveNotification, object: nil)
+        center.addObserver(self, selector: #selector(suspend),
+                           name: UIApplication.didEnterBackgroundNotification, object: nil)
+        center.addObserver(self, selector: #selector(resume),
+                           name: UIApplication.didBecomeActiveNotification, object: nil)
+        // The scene can finish building after the app has already left the foreground.
+        if UIApplication.shared.applicationState != .active { suspend() }
 
         // ── HUD polling timer ─────────────────────────────────────────────────
         hudTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
@@ -93,7 +100,19 @@ final class GameViewController: UIViewController {
         )
     }
 
-    @objc private func resetInput() {
+    /// Stops rendering, physics and every sound until the app is active again.
+    @objc private func suspend() {
+        resetInput()
+        scnView?.isPlaying = false
+        gameScene?.setActive(false)
+    }
+
+    @objc private func resume() {
+        gameScene?.setActive(true)
+        scnView?.isPlaying = true
+    }
+
+    private func resetInput() {
         controlsView?.reset()
         gameScene?.steerInput = 0
         gameScene?.throttleInput = 0

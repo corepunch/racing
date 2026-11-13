@@ -92,8 +92,8 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
         // Camera
         setupCamera()
 
-        // Audio
-        if audioEnabled { setupAudio() }
+        // Audio is switched off for now.
+        // if audioEnabled { setupAudio() }
     }
 
     private static func color(_ c: SIMD3<Float>) -> UIColor {
@@ -145,6 +145,18 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
         skidPlayer = makePlayer("skid", loops: true)
         skidPlayer?.volume = 0
         skidPlayer?.play()
+    }
+
+    /// Silences and freezes the game while the app is inactive or in the background.
+    func setActive(_ active: Bool) {
+        scene.isPaused = !active
+        if active {
+            enginePlayer?.play()
+            skidPlayer?.play()
+        } else {
+            enginePlayer?.pause()
+            skidPlayer?.pause()
+        }
     }
 
     private func updateAudio() {

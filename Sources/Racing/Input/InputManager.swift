@@ -3,7 +3,8 @@ import UIKit
 /// A floating touch control, with arrow keys available on keyboards.
 final class InputView: UIView {
     private let controlDiameter: CGFloat = 100
-    private var steeringDistance: CGFloat { max(bounds.width * 0.5, 1) }
+    /// Finger travel for full lock: the whole screen width, so a given drag steers gently.
+    private var steeringDistance: CGFloat { max(bounds.width, 1) }
     private var keys = Set<UIKeyboardHIDUsage>()
     private var activeTouch: UITouch?
     private var origin = CGPoint.zero
