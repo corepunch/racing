@@ -11,6 +11,8 @@ enum CurveDeformer {
     case pinch(angle: Float, amount: Float, width: Float)
     /// Height wave in metres, `count` crests per lap.
     case hills(count: Int, height: Float, phase: Float)
+    /// Random radius per control point, as a fraction of the radius: irregular corners.
+    case jitter(amount: Float, seed: UInt64)
     case stretch(x: Float, z: Float)
     case shear(Float)
     /// Smooth noise displacement in metres; `scale` is the feature size.
@@ -23,12 +25,47 @@ struct TrackCurve {
     var radius: Float = 330
     var pointCount = 48
     var altitude: Float = 0
+    /// When set, the control ring is a polygon of corners joined by straights: each corner
+    /// is rounded over this fraction of its shorter adjoining edge. `nil` gives a flowing spline.
+    var cornerCut: Float? = nil
     var deformers: [CurveDeformer]
 
     func controlPoints() -> [SIMD3<Float>] {
+        let ring = ringPoints()
+        guard let cut = cornerCut else { return ring }
+
+        // Straights between corners, each corner a quadratic arc through the polygon vertex.
+        let n = ring.count
+        let spacing: Float = 30
+        var path: [SIMD3<Float>] = []
+        func corner(_ i: Int) -> (entry: SIMD3<Float>, exit: SIMD3<Float>) {
+            let p = ring[i], a = ring[(i - 1 + n) % n], b = ring[(i + 1) % n]
+            let d = min(cut * min(simd_distance(a, p), simd_distance(p, b)), 170)
+            return (p + simd_normalize(a - p) * d, p + simd_normalize(b - p) * d)
+        }
+        for i in 0..<n {
+            let (entry, exit) = corner(i)
+            let steps = max(4, Int((simd_distance(entry, ring[i]) + simd_distance(ring[i], exit)) / spacing))
+            for k in 0..<steps {
+                let t = Float(k) / Float(steps), u = 1 - t
+                path.append(entry * (u * u) + ring[i] * (2 * u * t) + exit * (t * t))
+            }
+            let next = corner((i + 1) % n).entry
+            let straight = max(1, Int(simd_distance(exit, next) / spacing))
+            for k in 0..<straight { path.append(exit + (next - exit) * (Float(k) / Float(straight))) }
+        }
+        return path
+    }
+
+    private func ringPoints() -> [SIMD3<Float>] {
+        var jitters: [Int: Float] = [:]
+        for case let .jitter(amount, seed) in deformers {
+            var rng = SplitMix64(seed: seed)
+            for i in 0..<pointCount { jitters[i, default: 0] += rng.float(-1...1) * amount }
+        }
         var points = (0..<pointCount).map { i -> SIMD3<Float> in
             let a = Float(i) / Float(pointCount) * 2 * .pi
-            var r = radius
+            var r = radius * (1 + (jitters[i] ?? 0))
             var y = altitude
             for deformer in deformers {
                 switch deformer {
@@ -39,7 +76,7 @@ struct TrackCurve {
                     r -= radius * amount * exp(-(d * d) / (2 * width * width))
                 case let .hills(count, height, phase):
                     y += height * sin(Float(count) * a + phase)
-                case .stretch, .shear, .warp:
+                case .stretch, .shear, .warp, .jitter:
                     break
                 }
             }
@@ -58,37 +95,33 @@ struct TrackCurve {
                     let dz = noise.fbm(p.x / scale + 37.3, p.z / scale - 11.9, octaves: 2)
                     return SIMD3(p.x + dx * amount * 2, p.y, p.z + dz * amount * 2)
                 }
-            case .lobes, .pinch, .hills:
+            case .lobes, .pinch, .hills, .jitter:
                 break
             }
         }
         return points
     }
 
-    /// A random but drivable loop: a few lobes, maybe a pinch, rolling height.
+    /// A random circuit: an irregular polygon of long straights and rounded corners,
+    /// with one or two inward kinks and rolling height.
     static func random(seed: UInt64) -> TrackCurve {
         var rng = SplitMix64(seed: seed &* 7919 &+ 13)
-        var deformers: [CurveDeformer] = []
-        // From the overall shape down to chicane-sized wiggles.
-        let bands: [(counts: ClosedRange<Int>, amount: ClosedRange<Float>)] = [
-            (2...3, 0.14...0.24), (4...5, 0.07...0.13), (6...8, 0.04...0.075), (9...12, 0.022...0.04),
+        var deformers: [CurveDeformer] = [
+            .lobes(count: Int.random(in: 2...3, using: &rng), amount: rng.float(0.12...0.22),
+                   phase: rng.float(0...(2 * .pi))),
+            .jitter(amount: rng.float(0.13...0.2), seed: seed &+ 7),
         ]
-        for band in bands {
-            deformers.append(.lobes(count: Int.random(in: band.counts, using: &rng), amount: rng.float(band.amount),
-                                    phase: rng.float(0...(2 * .pi))))
+        for _ in 0..<Int.random(in: 1...2, using: &rng) {
+            deformers.append(.pinch(angle: rng.float(0...(2 * .pi)), amount: rng.float(0.2...0.32),
+                                    width: rng.float(0.25...0.4)))
         }
-        for _ in 0..<Int.random(in: 1...3, using: &rng) {
-            deformers.append(.pinch(angle: rng.float(0...(2 * .pi)), amount: rng.float(0.16...0.28),
-                                    width: rng.float(0.14...0.24)))
-        }
-        deformers.append(.hills(count: 1, height: rng.float(14...26), phase: rng.float(0...(2 * .pi))))
-        deformers.append(.hills(count: 2, height: rng.float(7...14), phase: rng.float(0...(2 * .pi))))
-        deformers.append(.hills(count: Int.random(in: 3...4, using: &rng), height: rng.float(3...8),
-                                phase: rng.float(0...(2 * .pi))))
-        deformers.append(.stretch(x: rng.float(0.85...1.3), z: rng.float(0.85...1.3)))
+        deformers.append(.hills(count: 1, height: rng.float(16...28), phase: rng.float(0...(2 * .pi))))
+        deformers.append(.hills(count: 2, height: rng.float(8...16), phase: rng.float(0...(2 * .pi))))
+        deformers.append(.hills(count: 3, height: rng.float(3...8), phase: rng.float(0...(2 * .pi))))
+        deformers.append(.stretch(x: rng.float(0.85...1.35), z: rng.float(0.85...1.2)))
         deformers.append(.shear(rng.float(-0.25...0.25)))
-        deformers.append(.warp(amount: rng.float(12...22), scale: 220, seed: seed &+ 101))
-        return TrackCurve(radius: rng.float(330...390), deformers: deformers)
+        return TrackCurve(radius: rng.float(480...560), pointCount: Int.random(in: 9...12, using: &rng),
+                          cornerCut: rng.float(0.26...0.34), deformers: deformers)
     }
 }
 
@@ -96,7 +129,7 @@ struct TrackCurve {
 struct TrackTheme {
     /// How the outer strip of the deck is marked.
     enum Edge {
-        /// Pale triangles on a dark strip, pointing into the road.
+        /// Pale triangles pointing into the road.
         case sawtooth
         /// Long two-colour kerb blocks with a thin inner line.
         case kerb
@@ -113,7 +146,9 @@ struct TrackTheme {
     var neonB: SIMD3<Float>
     /// Painted markings (arrows, edge lines, hazard stripes).
     var paint: SIMD3<Float>
-    /// Road deck metal and the darker structural hull.
+    /// Asphalt of the road surface.
+    var road = SIMD3<Float>(0.17, 0.17, 0.19)
+    /// Barrier metal and the darker structural hull.
     var metal: SIMD3<Float>
     var hull: SIMD3<Float>
     var window: SIMD3<Float>
@@ -124,10 +159,11 @@ struct TrackTheme {
     var environment: CGFloat
 
     static let neonNight = TrackTheme(
+        edge: .kerb,
         skyZenith: SIMD3(0.015, 0.02, 0.07), skyHorizon: SIMD3(0.17, 0.07, 0.26),
         skyGlow: SIMD3(0.95, 0.25, 0.60), stars: 1,
         neonA: SIMD3(0.10, 0.90, 1.00), neonB: SIMD3(1.00, 0.15, 0.60),
-        paint: SIMD3(0.95, 0.76, 0.12), metal: SIMD3(0.62, 0.66, 0.74), hull: SIMD3(0.20, 0.22, 0.28),
+        paint: SIMD3(0.78, 0.14, 0.14), metal: SIMD3(0.62, 0.66, 0.74), hull: SIMD3(0.20, 0.22, 0.28),
         window: SIMD3(1.00, 0.80, 0.50),
         sunColor: SIMD3(0.62, 0.70, 1.00), sunIntensity: 700, sunAngles: SIMD2(-.pi / 3.2, .pi / 5),
         ambient: 140, environment: 1.6)
@@ -137,7 +173,8 @@ struct TrackTheme {
         skyZenith: SIMD3(0.10, 0.09, 0.26), skyHorizon: SIMD3(0.78, 0.36, 0.20),
         skyGlow: SIMD3(1.00, 0.62, 0.18), stars: 0.3,
         neonA: SIMD3(1.00, 0.50, 0.08), neonB: SIMD3(0.10, 0.92, 0.78),
-        paint: SIMD3(0.80, 0.16, 0.12), metal: SIMD3(0.72, 0.64, 0.57), hull: SIMD3(0.26, 0.21, 0.20),
+        paint: SIMD3(0.80, 0.16, 0.12), road: SIMD3(0.19, 0.17, 0.16),
+        metal: SIMD3(0.72, 0.64, 0.57), hull: SIMD3(0.26, 0.21, 0.20),
         window: SIMD3(1.00, 0.70, 0.35),
         sunColor: SIMD3(1.00, 0.66, 0.40), sunIntensity: 1100, sunAngles: SIMD2(-.pi / 9, -.pi / 3),
         ambient: 220, environment: 1.3)
@@ -148,19 +185,22 @@ struct TrackTheme {
         skyGlow: SIMD3(1.00, 0.97, 0.90), stars: 0,
         fogStart: 220, fogEnd: 1300,
         neonA: SIMD3(0.15, 0.55, 1.00), neonB: SIMD3(1.00, 0.30, 0.08),
-        paint: SIMD3(0.95, 0.33, 0.10), metal: SIMD3(0.82, 0.84, 0.88), hull: SIMD3(0.46, 0.50, 0.56),
+        paint: SIMD3(0.16, 0.25, 0.62), road: SIMD3(0.27, 0.28, 0.30),
+        metal: SIMD3(0.82, 0.84, 0.88), hull: SIMD3(0.46, 0.50, 0.56),
         window: SIMD3(0.75, 0.90, 1.00),
         sunColor: SIMD3(1.00, 0.97, 0.92), sunIntensity: 1500, sunAngles: SIMD2(-.pi / 3.5, .pi / 6),
         ambient: 420, environment: 1.1)
 
+    /// Yellow-green afterglow under a deep blue sky.
     static let acid = TrackTheme(
-        skyZenith: SIMD3(0.01, 0.05, 0.05), skyHorizon: SIMD3(0.10, 0.26, 0.15),
-        skyGlow: SIMD3(0.55, 1.00, 0.25), stars: 0.6,
-        neonA: SIMD3(0.60, 1.00, 0.10), neonB: SIMD3(0.62, 0.25, 1.00),
-        paint: SIMD3(0.92, 0.92, 0.25), metal: SIMD3(0.58, 0.66, 0.62), hull: SIMD3(0.16, 0.22, 0.20),
-        window: SIMD3(0.70, 1.00, 0.60),
-        sunColor: SIMD3(0.70, 1.00, 0.80), sunIntensity: 650, sunAngles: SIMD2(-.pi / 3, -.pi / 4),
-        ambient: 150, environment: 1.6)
+        skyZenith: SIMD3(0.03, 0.05, 0.30), skyHorizon: SIMD3(0.62, 0.66, 0.22),
+        skyGlow: SIMD3(1.00, 0.95, 0.35), stars: 0.2,
+        neonA: SIMD3(0.20, 0.85, 1.00), neonB: SIMD3(0.75, 0.30, 1.00),
+        paint: SIMD3(0.92, 0.92, 0.92), road: SIMD3(0.16, 0.18, 0.21),
+        metal: SIMD3(0.58, 0.62, 0.70), hull: SIMD3(0.16, 0.17, 0.24),
+        window: SIMD3(1.00, 0.72, 0.35),
+        sunColor: SIMD3(1.00, 0.95, 0.60), sunIntensity: 800, sunAngles: SIMD2(-.pi / 8, -.pi / 4),
+        ambient: 240, environment: 1.4)
 
     static let all: [TrackTheme] = [.neonNight, .ember, .cryo, .acid]
 }
@@ -214,20 +254,16 @@ struct TrackDefinition {
 
 enum TrackLibrary {
     static let all: [TrackDefinition] = [
-        // Hand-tuned: three lobes with one hard inward bend and a long descent.
+        // Hand-tuned: a ten-corner circuit with one hard inward kink and a long descent.
         TrackDefinition(
             name: "Neon Meridian", seed: 11,
-            curve: TrackCurve(radius: 330, deformers: [
+            curve: TrackCurve(radius: 520, pointCount: 10, cornerCut: 0.3, deformers: [
                 .lobes(count: 3, amount: 0.17, phase: 0.4),
-                .lobes(count: 5, amount: 0.09, phase: 2.1),
-                .lobes(count: 8, amount: 0.055, phase: 0.9),
-                .lobes(count: 11, amount: 0.03, phase: 4.0),
-                .pinch(angle: 3.9, amount: 0.26, width: 0.2),
-                .pinch(angle: 1.2, amount: 0.18, width: 0.16),
-                .hills(count: 1, height: 22, phase: 1.0),
+                .jitter(amount: 0.15, seed: 4),
+                .pinch(angle: 3.9, amount: 0.3, width: 0.3),
+                .hills(count: 1, height: 24, phase: 1.0),
                 .hills(count: 3, height: 7, phase: 0.3),
-                .stretch(x: 1.25, z: 0.9),
-                .warp(amount: 12, scale: 260, seed: 5),
+                .stretch(x: 1.3, z: 0.9),
             ]),
             theme: .neonNight),
         TrackDefinition(name: "Ember Skyway", seed: 23, curve: .random(seed: 23), theme: .ember),

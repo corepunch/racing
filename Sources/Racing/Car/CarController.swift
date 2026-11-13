@@ -1,12 +1,16 @@
 import SceneKit
 import simd
 
-/// Four-wheel-drive vehicle. Dimensions follow the displayed truck's wheel locations;
-/// mass and drivetrain are approximations of a two-door Jeep Wrangler.
+/// Four-wheel-drive arcade racer. Dimensions follow the displayed car's wheel locations;
+/// power, grip and downforce are tuned for speed, not realism: about 380 km/h flat out.
 final class CarController {
     let mass: CGFloat = 1_900
-    private let engineForce: CGFloat = 8_000
-    private let brakeForce: CGFloat = 14_000
+    private let engineForce: CGFloat = 34_000
+    private let brakeForce: CGFloat = 46_000
+    /// Speed (m/s) at which drive force has faded to nothing.
+    static let topSpeed: Float = 106
+    /// Aerodynamic grip in N per (m/s)², pressing the car into the road.
+    private let downforce: Float = 3.2
     private var vehicle: SCNPhysicsVehicle?
     private weak var node: CarNode?
     private weak var world: SCNPhysicsWorld?
@@ -19,6 +23,10 @@ final class CarController {
     var throttle: Float = 0
     var brake: Float = 0
     var steer: Float = 0
+    /// Road normal under the car; the chassis is held towards it so it cannot roll over.
+    var groundUp = SIMD3<Float>(0, 1, 0)
+    /// 1 when the car sits flat on the road, negative when it is on its roof.
+    private(set) var upright: Float = 1
     private(set) var isDrifting = false
     private(set) var driftIntensity: Float = 0
     var speed: Float { abs(Float(vehicle?.speedInKilometersPerHour ?? 0)) / 3.6 }
@@ -33,13 +41,13 @@ final class CarController {
         let shape = SCNPhysicsShape(shapes: [chassisShape], transforms: [NSValue(scnMatrix4: SCNMatrix4MakeTranslation(0, 0.55, 0))])
         let body = SCNPhysicsBody(type: .dynamic, shape: shape)
         body.mass = mass
-        body.centerOfMassOffset = SCNVector3(0, 0.25, 0)
+        body.centerOfMassOffset = SCNVector3(0, -0.35, 0)
         body.categoryBitMask = PhysicsCategory.car
         body.collisionBitMask = PhysicsCategory.track | PhysicsCategory.terrain | PhysicsCategory.obstacle
         body.friction = 0.6
         body.restitution = 0
-        body.damping = 0.05
-        body.angularDamping = 0.5
+        body.damping = 0.02
+        body.angularDamping = 0.7
         car.physicsBody = body
 
         let wheelNodes = car.preparePhysicsWheels()
@@ -51,11 +59,11 @@ final class CarController {
             wheel.radius = 0.42
             wheel.suspensionRestLength = 0.28
             wheel.maximumSuspensionTravel = 20 // centimetres
-            wheel.suspensionStiffness = 30
-            wheel.suspensionCompression = 4.4
-            wheel.suspensionDamping = 5.5
-            wheel.maximumSuspensionForce = 12_000
-            wheel.frictionSlip = 2.5
+            wheel.suspensionStiffness = 55
+            wheel.suspensionCompression = 6.5
+            wheel.suspensionDamping = 8
+            wheel.maximumSuspensionForce = 40_000
+            wheel.frictionSlip = 5.5
             return wheel
         }
         let vehicle = SCNPhysicsVehicle(chassisBody: body, wheels: wheels)
@@ -101,10 +109,26 @@ final class CarController {
         if wantsReverse && !reversing && speed < 0.5 { reversing = true }
         if !wantsReverse && reversing && speed < 0.5 { reversing = false }
         let changingDirection = wantsReverse != reversing
-        let drive: CGFloat = changingDirection ? 0 : (reversing ? CGFloat(brake) : -CGFloat(throttle))
+        // Thrust fades towards top speed; reverse is deliberately weak.
+        let fade = CGFloat(max(0, 1 - pow(speed / Self.topSpeed, 2)))
+        let drive: CGFloat = changingDirection ? 0 : (reversing ? CGFloat(brake) * 0.25 : -CGFloat(throttle) * fade)
         let braking: CGFloat = changingDirection ? (wantsReverse ? CGFloat(brake) : 1) : 0
-        let speedFactor = max(0.35, 1 - speed / 65)
+        // Steering lock shrinks with speed so the car stays controllable at 100 m/s.
+        let speedFactor = max(0.1, 1 / (1 + speed / 20))
         let steering = CGFloat(-steer * 0.55 * speedFactor)
+        if let body = node?.physicsBody, let transform = node?.presentation.simdWorldTransform {
+            let up = SIMD3<Float>(transform.columns.1.x, transform.columns.1.y, transform.columns.1.z)
+            let push = -up * (downforce * speed * speed)
+            body.applyForce(SCNVector3(push.x, push.y, push.z), asImpulse: false)
+            // Righting moment: proportional to the tilt away from the road normal.
+            upright = simd_dot(up, groundUp)
+            let tilt = simd_cross(up, groundUp)
+            let amount = simd_length(tilt)
+            if amount > 1e-4 {
+                let axis = tilt / amount
+                body.applyTorque(SCNVector4(axis.x, axis.y, axis.z, amount * 42_000), asImpulse: false)
+            }
+        }
         for index in 0..<4 {
             vehicle.setSteeringAngle(index < 2 ? steering : 0, forWheelAt: index)
             vehicle.applyEngineForce(engineForce * drive / 4, forWheelAt: index)

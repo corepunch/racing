@@ -34,6 +34,12 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
     private var autoDriveProgress: Float = 0
     private var autoDriveSpeed: Float = 30
 
+    /// Debug driver: steers and brakes the real physics car round the lap (`-selfDrive YES`).
+    var selfDrive = false
+    private var flippedTime: Float = 0
+    private var telemetryTime: TimeInterval = 0
+    private var telemetryTop: Float = 0
+
     // --- Lap state ---
     private var lapCount       = 0
     private var lapStartTime: TimeInterval = 0
@@ -41,8 +47,6 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
     private var sessionTime: TimeInterval  = 0
     private var firstFrame     = true
     private var prevSampleIdx  = 0
-    private var lapArcStart: Float = 0
-    private var crossedStart   = false
 
     // HUD read-outs (GameViewController polls these)
     private(set) var displaySpeed: Float    = 0
@@ -149,7 +153,7 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
         let targetVol: Float = min(spd / 60.0, 1.0)
         let curVol = enginePlayer?.volume ?? 0
         enginePlayer?.volume = curVol + (targetVol - curVol) * 0.08
-        enginePlayer?.rate   = 0.6 + Float(spd / 200.0) * 0.8
+        enginePlayer?.rate   = min(2, 0.6 + Float(spd / 380.0) * 1.3)
 
         // Skid volume: drift intensity
         let skidVol: Float = physics.isDrifting ? min(physics.driftIntensity, 1.0) * 0.75 : 0
@@ -165,8 +169,8 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
         camera.wantsHDR = true
         camera.wantsExposureAdaptation = false
         camera.motionBlurIntensity = 0
-        camera.bloomIntensity = 0.9
-        camera.bloomThreshold = 0.9
+        camera.bloomIntensity = 0.45
+        camera.bloomThreshold = 1.0
         camera.bloomBlurRadius = 10
 
         cameraNode           = SCNNode()
@@ -201,11 +205,16 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
         physics.throttle = throttleInput
         physics.brake    = brakeInput
         physics.steer    = steerInput
+        if selfDrive { updateSelfDrive(time: time) }
 
         // Off the deck and falling into the city: put the car back on the road.
         let sampleIdx    = track.closestSampleIndex(to: physics.position)
         let nearSample   = track.sample(at: sampleIdx)
         if physics.position.y < nearSample.position.y - 25 { physics.reset(to: nearSample) }
+        // On its side or roof for a moment: same.
+        physics.groundUp = nearSample.up
+        flippedTime = physics.upright < 0.3 ? flippedTime + dt : 0
+        if flippedTime > 1 { flippedTime = 0; physics.reset(to: nearSample) }
 
         // Lap detection
         checkLap(sampleIdx: sampleIdx, time: time)
@@ -227,15 +236,42 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
         carWorldPos     = physics.position
     }
 
+    // MARK: - Self-drive (debug)
+
+    private func updateSelfDrive(time: TimeInterval) {
+        let here = track.closestSampleIndex(to: physics.position)
+        let step = track.totalLength / Float(track.stepCount)
+        // Aim at a point further ahead the faster we go.
+        let ahead = track.sample(at: here + Int((14 + physics.speed * 0.45) / step))
+        let to = ahead.position - physics.position
+        let bearing = atan2(to.x, -to.z)
+        physics.steer = max(-1, min(1, remainder(bearing - physics.heading, 2 * .pi) * 3))
+        // Brake for the tightest curvature within braking distance.
+        var tightest: Float = 0
+        let reach = Int((30 + physics.speed * 2.2) / step)
+        for k in stride(from: 0, to: reach, by: 2) { tightest = max(tightest, abs(track.sample(at: here + k).curvature)) }
+        let target = min(CarController.topSpeed, (30 / max(tightest, 1e-4)).squareRoot())
+        physics.throttle = physics.speed < target ? 1 : 0
+        physics.brake = physics.speed > target + 4 ? 0.8 : 0
+
+        telemetryTop = max(telemetryTop, physics.speed)
+        if time - telemetryTime > 2 {
+            telemetryTime = time
+            print(String(format: "[selfDrive] t=%.0fs lap=%d last=%.1fs progress=%.2f speed=%.0f km/h top=%.0f km/h upright=%.2f",
+                         time - lapStartTime, lapCount, lastLapTime, Float(here) / Float(track.stepCount),
+                         physics.speedKMH, telemetryTop * 3.6, physics.upright))
+        }
+    }
+
     // MARK: - Auto-drive (demo mode)
 
     private func updateAutoDrive(dt: Float, time: TimeInterval) {
-        // Brake for corners: target speed from the tightest curvature in the next 80 m.
+        // Brake for corners: target speed from the tightest curvature in the next 200 m.
         let here = Int(autoDriveProgress * Float(track.stepCount))
         var maxCurv: Float = 0
-        for k in stride(from: 0, to: 40, by: 2) { maxCurv = max(maxCurv, abs(track.sample(at: here + k).curvature)) }
-        let target = min(46, sqrt(16 / max(maxCurv, 1e-4)))
-        autoDriveSpeed += max(-14 * dt, min(7 * dt, target - autoDriveSpeed))
+        for k in stride(from: 0, to: 100, by: 2) { maxCurv = max(maxCurv, abs(track.sample(at: here + k).curvature)) }
+        let target = min(CarController.topSpeed, sqrt(34 / max(maxCurv, 1e-4)))
+        autoDriveSpeed += max(-34 * dt, min(16 * dt, target - autoDriveSpeed))
         let speed = autoDriveSpeed
         autoDriveProgress += dt * speed / track.totalLength
         if autoDriveProgress >= 1 { autoDriveProgress -= 1 }
@@ -301,21 +337,19 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
         let lookAt = physics.position + fwd * 5 + SIMD3<Float>(0, 1.3, 0)
         cameraNode.simdLook(at: lookAt, up: SIMD3<Float>(0, 1, 0), localFront: SIMD3<Float>(0, 0, -1))
 
-        camera.fieldOfView = CGFloat(62 + physics.speed * 0.1)
+        camera.fieldOfView = CGFloat(60 + min(displaySpeed / 3.6, 110) * 0.2)
     }
 
     // MARK: - Lap detection
 
     private func checkLap(sampleIdx: Int, time: TimeInterval) {
-        let progress = Float(sampleIdx) / Float(track.stepCount)
-
-        if !crossedStart && progress < 0.05 && prevSampleIdx > track.stepCount - 20 {
-            // Car wrapped from near end back to start
+        // Wrapped from the last tenth of the lap into the first.
+        let n = track.stepCount
+        if prevSampleIdx > n * 9 / 10, sampleIdx < n / 10 {
             lapCount += 1
             lastLapTime = time - lapStartTime
             lapStartTime = time
         }
-        crossedStart = progress > 0.08
         prevSampleIdx = sampleIdx
     }
 }

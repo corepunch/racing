@@ -5,7 +5,8 @@ Everything in a circuit is generated at launch from a `TrackDefinition`
 deformers, the swept road hull, the city around it and every texture.
 
 Launch arguments: `-track <0...3>` picks a library circuit, `-seed <n>` generates
-a new one, `-autoDrive YES` runs the demo. `-recordVideos <dir>` renders an
+a new one, `-autoDrive YES` runs the demo, `-selfDrive YES` has a simple driver steer the real
+physics car and print lap telemetry (the quickest check of handling changes). `-recordVideos <dir>` renders an
 overview, a start-line shot and a drive-through per circuit instead of starting
 the game (`-recordStillsOnly YES` for stills only).
 

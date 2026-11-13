@@ -275,78 +275,74 @@ enum ProceduralTextures {
         case .boost: label = TextMask("BOOST")
         case .barcode: label = TextMask("SECTOR \(code)  AG-7")
         case .start: label = TextMask("GRID")
-        case .chevrons, .turn: label = nil
+        case .chevrons, .bands: label = nil
         }
+        let cream = SIMD3<Float>(0.86, 0.83, 0.74)
         return bake(width: 1024, height: 1024) { u, v in
             let pm = SIMD2(u * 16, v * 16)     // metres
-            let m = base.sample(u, v)
-            let p = plates(u, v, cols: 4, rows: 4, size: SIMD2(16, 16), seam: 0.05, stagger: true, noise: n)
-            var t = Texel()
-            t.albedo = theme.metal * (0.50 + p.tint * 0.14) * m.tone
-            t.rough = 0.30 + m.wear * 0.22 + m.grain * 0.04
-            t.height = -p.seam + p.bolt * 0.5
-            t.albedo *= 1 - p.seam * 0.75
-            t.rough += p.seam * 0.3
-
-            // Two tread lanes of raised diamond plate.
-            let lane = max(band(u - 0.27, 0.085, aa), band(u - 0.73, 0.085, aa))
-            let diamond = max(0, sin((u + v) * 96 * .pi) * sin((u - v) * 96 * .pi))
-            t.height += lane * diamond * 0.35
-            t.albedo *= 1 - lane * 0.22
-            t.rough += lane * 0.18
-
-            // Chipped paint: worn through where the plate is scuffed.
-            let chips = n.fbm(u * 48, v * 48, octaves: 2, period: 48)
-            let wearMask = 1 - 0.75 * smoothstep(0.5, 0.75, chips * 0.5 + 0.5 - 0.2 + m.wear * 0.4)
             let x = u * 2 - 1
+            // Asphalt dragged into long streaks by speed, darker along the rubbered racing line.
+            let streak = n.noise(u * 64, v * 2, period: 2)
+            let fine = n.noise(u * 176, v * 4, period: 4)
+            let blotch = n.fbm(u * 4, v * 4, octaves: 3, period: 4)
+            let grain = n.noise(u * 200, v * 200, period: 200)
+            let rubber = band(x, 0.4, 0.3) * (0.55 + 0.45 * n.noise(u * 24, v * 2, period: 2))
+            var t = Texel()
+            t.albedo = theme.road * (1 + streak * 0.3 + fine * 0.16 + blotch * 0.12 + grain * 0.07)
+                * (1 - rubber * 0.28)
+            t.metal = 0
+            t.rough = 0.5 + blotch * 0.12 - rubber * 0.1
+            t.height = grain * 0.12
+            // One expansion joint per section.
+            let joint = max(band(v, 0.003, 0.001), band(v - 1, 0.003, 0.001))
+            t.albedo *= 1 - joint * 0.6
+            t.height -= joint
+
+            // Paint is scuffed away in patches.
+            let chips = n.fbm(u * 48, v * 48, octaves: 2, period: 48)
+            let wearMask = 1 - 0.75 * smoothstep(0.5, 0.75, chips * 0.5 + 0.3 + blotch * 0.3 + rubber * 0.15)
 
             // The edge band runs through every section and ties them together.
             let e = min(u, 1 - u) / 0.105          // 0 at the gutter, 1 at the band's inner edge
             if pattern != .hazard, e < 1.2 {
                 switch theme.edge {
                 case .sawtooth:
-                    // Pale triangles biting into the deck over a dark strip, four per section.
+                    // Pale triangles biting into the road, four per section.
                     let tooth = 1 - abs(fract(v * 4) * 2 - 1)
                     let tri = 1 - smoothstep(-0.03, 0.03, e - tooth * 0.95)
-                    t.paint(dark, (1 - smoothstep(0.97, 1.0, e)) * 0.9)
-                    t.paint(theme.metal * 0.95, tri * (0.6 + wearMask * 0.4))
-                    t.paint(theme.paint, band(e - 1.08, 0.05, 0.03) * wearMask)
+                    t.paint(cream, tri * (0.45 + wearMask * 0.5))
                 case .kerb:
                     // Racing kerb: long alternating blocks, then a thin line.
                     let block = fract(v * 4) < 0.5
                     let kerb = (1 - smoothstep(0.6, 0.66, e)) * band(fract(v * 8) - 0.5, 0.47, 0.02)
-                    t.paint(block ? theme.paint : SIMD3(0.86, 0.82, 0.72), kerb * (0.55 + wearMask * 0.45))
+                    t.paint(block ? theme.paint : cream, kerb * (0.55 + wearMask * 0.45))
                     t.height += kerb * 0.12 * (0.5 + 0.5 * sin(v * 64 * .pi))
-                    t.paint(SIMD3(0.86, 0.82, 0.72), band(e - 0.95, 0.06, 0.03) * wearMask)
+                    t.paint(cream, band(e - 0.95, 0.06, 0.03) * wearMask)
                 }
             }
 
             switch pattern {
             case .plain:
-                let dash = band(fract(v * 4) - 0.5, 0.3, aa * 4) * band(x, 0.012, aa * 2)
-                t.glow(theme.neonA, dash)
+                let dash = band(fract(v * 4) - 0.5, 0.25, aa * 4) * band(x, 0.01, aa * 2)
+                t.paint(cream, dash * wearMask * 0.8)
                 t.paint(white, label!.coverage(pm, center: SIMD2(12.2, 2.6), size: 0.42) * wearMask)
 
             case .chevrons:
+                // Broad, faded arrowheads pointing the way.
                 var c: Float = 0
                 for k in 0..<3 {
-                    c = max(c, chevron(x, v - (0.42 + Float(k) * 0.24), halfWidth: 0.5, slope: 0.42,
-                                       thickness: 0.045, aa: aa))
+                    c = max(c, chevron(x, v - (0.42 + Float(k) * 0.26), halfWidth: 0.62, slope: 0.3,
+                                       thickness: 0.06, aa: aa))
                 }
-                t.paint(theme.paint, c * wearMask)
+                t.paint(cream, c * wearMask * 0.6)
 
-            case .turn:
-                // Arrowheads pointing towards +u; mirrored in the mesh for left-handers.
-                let back = box(x, v - 0.5, 0.86, 0.36, aa)
-                t.paint(dark, back * 0.9)
-                var c: Float = 0
-                for k in 0..<4 {
-                    c = max(c, chevron((v - 0.5) * 2, x - (-0.36 + Float(k) * 0.4), halfWidth: 0.58,
-                                       slope: 0.42, thickness: 0.085, aa: aa * 2))
-                }
-                t.paint(theme.paint, c * back * wearMask)
-                let rim = max(band(abs(v - 0.5) - 0.37, 0.006, aa), 0) * band(x, 0.86, aa)
-                t.glow(theme.neonB, rim)
+            case .bands:
+                // Wide colour bands across the road with an arrowhead between them.
+                let inside = band(x, 0.78, aa * 2)
+                let stripes = max(band(v - 0.2, 0.13, aa), band(v - 0.8, 0.13, aa))
+                t.paint(theme.paint * 0.85, stripes * inside * (0.5 + wearMask * 0.4))
+                let c = chevron(x, v - 0.6, halfWidth: 0.62, slope: 0.3, thickness: 0.06, aa: aa)
+                t.paint(cream, c * wearMask * 0.6)
 
             case .hazard:
                 let side = max(band(u - 0.12, 0.06, aa), band(u - 0.88, 0.06, aa))
@@ -368,7 +364,7 @@ enum ProceduralTextures {
                 t.albedo = simd_mix(t.albedo, dark, SIMD3(repeating: hole))
                 t.height -= hole * 0.9
                 t.rough = mix(t.rough, 0.7, hole)
-                t.emission += theme.neonB * hole * 0.35
+                t.emission += theme.neonB * hole * 0.12
                 t.paint(white, label!.coverage(pm, center: SIMD2(14.1, 8), size: 0.5) * wearMask)
 
             case .boost:
@@ -397,8 +393,6 @@ enum ProceduralTextures {
                     let cellMask = band(fract((x - 0.3) / 0.075) - 0.5, 0.4, 0.05) * band(fract(v * 12) - 0.5, 0.4, 0.05)
                     t.paint(SIMD3(repeating: 0.85), cellMask * wearMask)
                 }
-                let dash = band(fract(v * 4) - 0.5, 0.3, aa * 4) * band(x, 0.012, aa * 2)
-                t.glow(theme.neonA, dash)
                 t.paint(white, label!.coverage(pm, center: SIMD2(11.6, 14.6), size: 0.6) * wearMask)
 
             case .start:
@@ -406,7 +400,7 @@ enum ProceduralTextures {
                 let checker = (Int((u * 24).rounded(.down)) + Int(((v - 0.425) / 0.05).rounded(.down))) & 1 == 0
                 t.paint(checker ? SIMD3(repeating: 0.92) : dark, stripe)
                 let line = band(v - 0.62, 0.008, aa) * band(x, 0.9, aa)
-                t.glow(theme.neonB, line)
+                t.paint(theme.paint, line)
                 t.paint(white, label!.coverage(pm, center: SIMD2(8, 12), size: 1.6) * wearMask)
                 // Grid brackets behind the line.
                 for k in 0..<2 {
@@ -445,32 +439,30 @@ enum ProceduralTextures {
             t.height += trim * 0.5
 
             let y = v * 16, x = u * 1.36          // metres
+            let cream = SIMD3<Float>(0.86, 0.83, 0.74)
+            let scuff = 0.7 + m.wear * 0.3
             switch pattern {
             case .strip:
-                t.glow(theme.neonA, band(u - 0.68, 0.045, 0.02))
+                t.paint(theme.paint, band(u - 0.68, 0.035, 0.02) * scuff)
                 let vent = band(u - 0.3, 0.1, 0.02) * band(fract(y / 0.25) - 0.5, 0.25, 0.08)
                     * band(fract(v * 4) - 0.5, 0.3, 0.01)
                 t.albedo = simd_mix(t.albedo, dark, SIMD3(repeating: vent))
                 t.height -= vent * 0.6
-            case .chevrons:
-                let back = band(u - 0.5, 0.34, 0.02)
-                t.paint(dark, back)
-                let c = chevron(x - 0.68, fract(y / 1.0) - 0.75, halfWidth: 0.4, slope: 1.1,
-                                thickness: 0.14, aa: 0.03)
-                t.glow(theme.neonB, c * back)
+            case .blocks:
+                // Two-colour marker blocks through corners, like the kerbs.
+                let back = band(u - 0.5, 0.3, 0.02)
+                t.paint(fract(y / 4) < 0.5 ? theme.paint : cream, back * scuff)
             case .hazard:
                 let back = band(u - 0.48, 0.3, 0.02)
                 let stripe = band(fract((x + y) / 0.8) - 0.5, 0.25, 0.04)
                 t.paint(dark, back)
-                t.paint(theme.paint, back * stripe * (0.75 + m.wear * 0.25))
-                t.glow(theme.neonA, band(u - 0.86, 0.02, 0.012))
+                t.paint(theme.paint, back * stripe * scuff)
             case .label:
                 let back = band(u - 0.47, 0.3, 0.02)
                 t.paint(dark, back)
                 // Twice per section, reading against +v.
                 let q = SIMD2(4 - (y.truncatingRemainder(dividingBy: 8)), x)
-                t.glow(theme.neonB, lettering!.coverage(q, center: SIMD2(0, 0.64), size: 0.5) * back)
-                t.glow(theme.neonA, band(u - 0.86, 0.02, 0.012))
+                t.paint(cream, lettering!.coverage(q, center: SIMD2(0, 0.64), size: 0.5) * back)
             }
             return t
         }
@@ -531,12 +523,11 @@ enum ProceduralTextures {
             let rib = max(band(v, 0.035, 0.004), band(v - 1, 0.035, 0.004))
             t.albedo = simd_mix(t.albedo, dark, SIMD3(repeating: rib * 0.85))
             t.height += rib * 1.2
-            t.glow(theme.neonB, max(band(v, 0.006, 0.002), band(v - 1, 0.006, 0.002)))
             // Continuous light tube in a dark recess.
             let recess = band(u - 0.5, 0.045, 0.006) * (1 - rib)
             t.albedo = simd_mix(t.albedo, dark, SIMD3(repeating: recess))
             t.height -= recess * 0.6
-            t.glow(theme.neonA, band(u - 0.5, 0.016, 0.006) * (1 - rib))
+            t.glow(theme.window, band(u - 0.5, 0.016, 0.006) * (1 - rib) * 0.8)
             // Cable trays.
             let tray = max(band(u - 0.2, 0.025, 0.004), band(u - 0.8, 0.025, 0.004)) * (1 - rib)
             let cable = 0.5 + 0.5 * sin(u * 8 * 160 * .pi)
@@ -553,7 +544,7 @@ enum ProceduralTextures {
     /// Chamfer between wall and ceiling: a row of framed light panels, four per section.
     static func tunnelLight(theme: TrackTheme, seed: UInt64) -> TextureSet {
         let base = MetalBase(seed: seed)
-        let warm = simd_mix(theme.neonA, SIMD3(repeating: 1), SIMD3(repeating: 0.45))
+        let warm = simd_mix(theme.window, SIMD3(repeating: 1), SIMD3(repeating: 0.3))
         return bake(width: 64, height: 512) { u, v in
             let m = base.sample(u * 0.25, v, cells: 4)
             var t = Texel()
@@ -609,7 +600,7 @@ enum ProceduralTextures {
                 t.albedo *= 0.6
                 let riser = col % 8 == 3 ? band(lu - 0.5, 0.16, 0.05) : 0
                 let color = col % 16 == 3 ? theme.neonA : theme.neonB
-                t.emission = color * riser * (0.6 + 0.4 * Float(h & 1))
+                t.emission = color * riser * 0.5 * Float(row % 4 == 0 ? 0 : 1) * Float(col % 16 == 3 ? 1 : 0)
                 let dot = h & 31 == 0 ? box(lu - 0.5, lv - 0.5, 0.12, 0.12, 0.04) : 0
                 t.emission += theme.window * dot
                 t.height = -band(lv, 0.04, 0.02) * 0.5 - riser * 0.4

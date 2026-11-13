@@ -6,7 +6,7 @@ import simd
 enum CityScenery {
 
     private enum Slot: Int, CaseIterable {
-        case facadeA, facadeB, facadeC, hull, neonA, neonB, floor
+        case facadeA, facadeB, facadeC, hull, neonA, neonB, floor, lamp, arrow
     }
 
     private struct Tower {
@@ -25,6 +25,7 @@ enum CityScenery {
         towers(path: path, floorY: floorY, rng: &rng, mesh: &mesh)
         pylons(path: path, floorY: floorY, mesh: &mesh)
         let signs = gates(path: path, rng: &rng, mesh: &mesh)
+        turnArrows(path: path, mesh: &mesh)
 
         let mid = (path.boundsMin + path.boundsMax) / 2
         let reach: Float = 4000
@@ -41,10 +42,14 @@ enum CityScenery {
             property.contentsTransform = SCNMatrix4MakeScale(1 / 8, 1 / 8, 1)   // box UVs are in metres
         }
         materials.append(hull)
-        materials.append(TrackMeshBuilder.neon(theme.neonA, intensity: 2.5))
-        materials.append(TrackMeshBuilder.neon(theme.neonB, intensity: 2.5))
+        materials.append(TrackMeshBuilder.neon(theme.neonA, intensity: 1.8))
+        materials.append(TrackMeshBuilder.neon(theme.neonB, intensity: 1.8))
         materials.append(ProceduralTextures.cityFloor(theme: theme, seed: seed &+ 80)
             .material(name: "city-floor", tile: SIMD2(800, 800), glow: 1.5))
+        materials.append(TrackMeshBuilder.neon(theme.window, intensity: 2))
+        let arrow = TrackMeshBuilder.neon(SIMD3(1.0, 0.62, 0.08), intensity: 1.7)
+        arrow.isDoubleSided = true
+        materials.append(arrow)
 
         let node = SCNNode(geometry: mesh.geometry(materials: materials))
         node.name = "city"
@@ -136,9 +141,11 @@ enum CityScenery {
         mesh.box(style, origin: origin, basis: basis, size: SIMD3(size.x, bodyHeight, size.z),
                  color: color, topSlot: Slot.hull.rawValue)
 
-        // Light band under the roof line.
-        mesh.box(neon, origin: origin + SIMD3(0, bodyHeight - 4, 0), basis: basis,
-                 size: SIMD3(size.x + 0.8, 1.0, size.z + 0.8))
+        // A few towers carry a light band under the roof line.
+        if details.2 > 0.72 {
+            mesh.box(neon, origin: origin + SIMD3(0, bodyHeight - 4, 0), basis: basis,
+                     size: SIMD3(size.x + 0.8, 1.0, size.z + 0.8))
+        }
 
         var roof = bodyHeight
         if details.2 < 0.75 {
@@ -152,11 +159,11 @@ enum CityScenery {
         if details.3 < 0.55 {
             mesh.box(Slot.hull.rawValue, origin: origin + SIMD3(0, roof, 0), basis: basis,
                      size: SIMD3(1.6, 26 + details.1 * 30, 1.6), color: SIMD3(repeating: 0.6))
-            mesh.box(neon, origin: origin + SIMD3(0, roof + 26 + details.1 * 30, 0), basis: basis,
-                     size: SIMD3(2.2, 2.2, 2.2))
+            mesh.box(Slot.neonB.rawValue, origin: origin + SIMD3(0, roof + 26 + details.1 * 30, 0), basis: basis,
+                     size: SIMD3(1.4, 1.4, 1.4))
         }
         // Neon riser up one corner.
-        if details.0 > 0.3 {
+        if details.0 > 0.88 {
             let corner = basis * SIMD3(size.x / 2 * (details.1 < 0.5 ? 1 : -1), 0, size.z / 2)
             mesh.box(neon, origin: origin + corner + SIMD3(0, bodyHeight * 0.35, 0), basis: basis,
                      size: SIMD3(1.2, bodyHeight * 0.6, 1.2))
@@ -182,8 +189,48 @@ enum CityScenery {
             let top = underside.y - 1.6
             mesh.box(slot, origin: SIMD3(s.position.x, floorY, s.position.z), basis: upright,
                      size: SIMD3(3.6, top - floorY, 3.6), color: SIMD3(repeating: 0.8), top: false)
-            mesh.box(Slot.neonA.rawValue, origin: SIMD3(s.position.x, top - 14, s.position.z), basis: upright,
-                     size: SIMD3(4.2, 0.6, 4.2))
+        }
+    }
+
+    // MARK: - Turn arrows
+
+    /// Big lit arrows along the outside of every corner, pointing the way round it.
+    private static func turnArrows(path: TrackPath, mesh: inout MeshBuilder) {
+        let per = TrackPath.sectionSamples
+        let sections = TrackSections.plan(path: path)
+        // Arrow outline in (along, up): a shaft and a broad head.
+        let length: Float = 9, shaft: Float = 0.75, head: Float = 2, neck: Float = 9 / 2 - 3.6
+        let outline: [SIMD2<Float>] = [
+            SIMD2(-length / 2, -shaft), SIMD2(neck, -shaft), SIMD2(neck, -head), SIMD2(length / 2, 0),
+            SIMD2(neck, head), SIMD2(neck, shaft), SIMD2(-length / 2, shaft),
+        ]
+        for section in stride(from: 0, to: path.sectionCount, by: 2) where sections[section].enclosure == nil {
+            let s = path.samples[section * per + per / 2]
+            let mean = (0..<per).reduce(Float(0)) { $0 + path.samples[section * per + $1].curvature } / Float(per)
+            guard abs(mean) >= TrackSections.bendCurvature else { continue }
+            let side: Float = mean > 0 ? -1 : 1          // outside of the corner
+            let forward = simd_normalize(SIMD3(s.forward.x, 0, s.forward.z))
+            let out = simd_cross(forward, SIMD3(0, 1, 0)) * side
+            let up = SIMD3<Float>(0, 1, 0)
+            let base = s.position + out * (s.halfWidth + TrackMeshBuilder.shoulder + 1.6)
+            let centre = base + up * 4.6
+            let slot = Slot.arrow.rawValue
+            var faces: [[UInt32]] = []
+            for depth: Float in [-0.35, 0.35] {
+                faces.append(outline.map { mesh.vertex(centre + forward * $0.x + up * $0.y + out * depth, -out * (depth < 0 ? 1 : -1)) })
+            }
+            for f in faces {
+                mesh.quad(slot, f[0], f[1], f[5], f[6])
+                mesh.triangle(slot, f[2], f[3], f[4])
+            }
+            for k in 0..<outline.count {
+                let j = (k + 1) % outline.count
+                mesh.quad(slot, faces[0][k], faces[0][j], faces[1][j], faces[1][k])
+            }
+            // Post.
+            mesh.box(Slot.hull.rawValue, origin: base - up * 1.5,
+                     basis: simd_float3x3(columns: (forward, up, simd_cross(forward, up))),
+                     size: SIMD3(0.7, 6.1 - head, 0.5), color: SIMD3(repeating: 0.8), top: false)
         }
     }
 
@@ -214,16 +261,13 @@ enum CityScenery {
             for side: Float in [-1, 1] {
                 mesh.box(slot, origin: s.position + s.right * (side * reach) - s.up * 1.2, basis: frame,
                          size: SIMD3(1.4, height + 1.2, 2.4), color: color, top: false)
-                mesh.box(neon, origin: s.position + s.right * (side * (reach - 0.78)) + s.up * 2.2, basis: frame,
-                         size: SIMD3(0.16, height - 3.4, 0.7))
             }
             mesh.box(slot, origin: s.position + s.up * height, basis: frame,
                      size: SIMD3(reach * 2 + 1.4, beam, 2.8), color: color)
-            mesh.box(neon, origin: s.position + s.up * (height - 0.22), basis: frame,
-                     size: SIMD3(s.halfWidth * 1.7, 0.22, 0.6))
-            if start {
-                mesh.box(neon, origin: s.position + s.up * (height + beam), basis: frame,
-                         size: SIMD3(s.halfWidth * 1.2, 0.5, 0.5))
+            // Floodlights under the beam.
+            for x: Float in [-0.6, -0.2, 0.2, 0.6] {
+                mesh.box(Slot.lamp.rawValue, origin: s.position + s.right * (x * s.halfWidth) + s.up * (height - 0.25),
+                         basis: frame, size: SIMD3(1.6, 0.25, 0.8))
             }
             // Sign on the face of the beam that oncoming cars see.
             let text = start ? "START" : String(format: "%02d", index)

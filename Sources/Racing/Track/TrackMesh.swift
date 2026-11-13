@@ -3,18 +3,16 @@ import simd
 
 /// Deck texture of one 16 m section. Each case is a separately generated tile.
 enum DeckPattern: Int, CaseIterable {
-    case plain, chevrons, turn, hazard, grate, boost, barcode, start
+    case plain, chevrons, bands, hazard, grate, boost, barcode, start
 }
 
 enum WallPattern: Int, CaseIterable {
-    case strip, chevrons, hazard, label
+    case strip, blocks, hazard, label
 }
 
 struct TrackSection {
     var deck: DeckPattern
     var wall: WallPattern
-    /// Flips the deck texture across the road, so `turn` arrows point left.
-    var mirrored = false
     var enclosure: Enclosure.Kind? = nil
     /// First and last section of an enclosure get a portal face.
     var portalIn = false
@@ -22,7 +20,7 @@ struct TrackSection {
 }
 
 /// Chooses the texture of every section from the curve: repeating motifs on the
-/// fast parts, turn arrows on the approach to a bend, hazard marking inside it.
+/// fast parts, colour bands on the approach to a corner, marker blocks through it.
 enum TrackSections {
     static func plan(path: TrackPath) -> [TrackSection] {
         let n = path.sectionCount
@@ -31,12 +29,12 @@ enum TrackSections {
             (0..<per).reduce(Float(0)) { $0 + path.samples[s * per + $1].curvature } / Float(per)
         }
         var rng = SplitMix64(seed: path.definition.seed &+ 303)
-        let accents: [DeckPattern] = [.chevrons, .barcode, .grate, .boost]
+        let accents: [DeckPattern] = [.chevrons, .barcode, .grate, .boost, .bands]
         let motifs: [[DeckPattern]] = (0..<3).map { _ in
             [.plain, .chevrons, .plain, accents.randomElement(using: &rng)!,
              .plain, accents.randomElement(using: &rng)!]
         }
-        let bend: Float = 0.008, sharp: Float = 0.015
+        let bend = bendCurvature
 
         var enclosed = [Enclosure.Kind?](repeating: nil, count: n)
         for e in path.definition.enclosures ?? Enclosure.random(seed: path.definition.seed) {
@@ -56,19 +54,18 @@ enum TrackSections {
 
         func surface(_ i: Int) -> TrackSection {
             let here = curvature[i]
-            let ahead = [curvature[(i + 1) % n], curvature[(i + 2) % n]].max { abs($0) < abs($1) }!
+            let ahead = max(abs(curvature[(i + 1) % n]), abs(curvature[(i + 2) % n]))
             if i == 0 { return TrackSection(deck: .start, wall: .strip) }
-            if abs(here) < bend, abs(ahead) >= bend {
-                return TrackSection(deck: .turn, wall: .hazard, mirrored: ahead < 0)
-            }
-            if abs(here) >= sharp { return TrackSection(deck: .hazard, wall: .chevrons) }
-            if abs(here) >= bend {
-                return TrackSection(deck: i % 2 == 0 ? .turn : .plain, wall: .chevrons, mirrored: here < 0)
-            }
+            // Colour bands and hazard walls warn of a corner; marker blocks line it.
+            if abs(here) < bend, ahead >= bend { return TrackSection(deck: .bands, wall: .hazard) }
+            if abs(here) >= bend { return TrackSection(deck: .plain, wall: .blocks) }
             let motif = motifs[(i / 12) % motifs.count]
             return TrackSection(deck: motif[i % motif.count], wall: i % 3 == 1 ? .label : .strip)
         }
     }
+
+    /// Mean curvature (1/m) above which a section counts as part of a corner.
+    static let bendCurvature: Float = 0.0035
 }
 
 /// Sweeps a closed hull cross-section along the path: deck, glowing gutters,
@@ -167,7 +164,7 @@ enum TrackMeshBuilder {
                     let pb = s.position + s.right * b.x + s.up * b.y
                     var ua = SIMD2<Float>(0, v), ub = SIMD2<Float>(1, v)
                     switch piece.kind {
-                    case .deck: if section.mirrored { swap(&ua, &ub) }
+                    case .deck: break
                     case .wallLeft:
                         swap(&ua, &ub)
                         // Lettering must not come out mirrored on the opposite wall.
@@ -227,21 +224,27 @@ enum TrackMeshBuilder {
 
         var materials = DeckPattern.allCases.map {
             ProceduralTextures.deck($0, theme: theme, seed: seed &+ UInt64($0.rawValue))
-                .material(name: "deck-\($0)", glow: 2.2)
+                .material(name: "deck-\($0)", glow: 1.8)
         }
         materials += WallPattern.allCases.map {
             ProceduralTextures.wall($0, theme: theme, seed: seed &+ 40 &+ UInt64($0.rawValue),
                                     label: "\(path.definition.name.uppercased())  //  MAGLOCK ZONE")
-                .material(name: "wall-\($0)", glow: 2.2)
+                .material(name: "wall-\($0)", glow: 1)
         }
-        materials.append(neon(theme.neonA, intensity: 2.5))
+        // Gutter: a plain painted channel.
+        let gutter = SCNMaterial()
+        gutter.lightingModel = .physicallyBased
+        gutter.diffuse.contents = UIColor(white: 0.62, alpha: 1)
+        gutter.roughness.contents = 0.6
+        gutter.metalness.contents = 0
+        materials.append(gutter)
         materials.append(hullMaterial(theme: theme, seed: seed))
-        materials.append(ProceduralTextures.belly(theme: theme, seed: seed &+ 61).material(name: "belly", glow: 2.5))
+        materials.append(ProceduralTextures.belly(theme: theme, seed: seed &+ 61).material(name: "belly", glow: 1.6))
         materials.append(SCNMaterial())
         materials.append(ProceduralTextures.tunnelWall(theme: theme, seed: seed &+ 62)
-            .material(name: "tunnel-wall", glow: 3))
+            .material(name: "tunnel-wall", glow: 2.2))
         materials.append(ProceduralTextures.tunnelLight(theme: theme, seed: seed &+ 63)
-            .material(name: "tunnel-light", glow: 3.5))
+            .material(name: "tunnel-light", glow: 2.6))
 
         let node = SCNNode(geometry: mesh.geometry(materials: materials, skipping: [barrierSlot]))
         node.name = "trackMesh"

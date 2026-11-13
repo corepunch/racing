@@ -38,6 +38,7 @@ final class GameViewController: UIViewController {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let scene = GameScene(definition: definition)
             scene.autoDrive = autoDrive
+            scene.selfDrive = UserDefaults.standard.bool(forKey: "selfDrive")
             DispatchQueue.main.async { [weak self] in
                 guard let self = self else { return }
                 self.installScene(scene)
