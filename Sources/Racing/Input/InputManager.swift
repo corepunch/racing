@@ -1,32 +1,33 @@
 import UIKit
 
-/// A floating touch control, with arrow keys available on keyboards.
+/// One-thumb control. Touch anywhere and slide: sideways steers, pulling down airbrakes.
+/// The ship accelerates on its own, so lifting the thumb just flies straight.
+/// Arrow keys do the same on a keyboard.
 final class InputView: UIView {
-    private let controlDiameter: CGFloat = 100
-    /// Finger travel for full lock: the whole screen width, so a given drag steers gently.
-    private var steeringDistance: CGFloat { max(bounds.width, 1) }
-    /// Downward finger travel for a full stop.
-    private var brakeDistance: CGFloat { max(max(bounds.width, bounds.height) * 0.38, 1) }
+    /// Sideways travel for full lock, in points.
+    private var steeringDistance: CGFloat { max(70, min(bounds.width * 0.3, 130)) }
+    /// Downward travel before the airbrake starts, and from there to full.
+    private let brakeDeadZone: CGFloat = 34
+    private let brakeDistance: CGFloat = 90
     private var keys = Set<UIKeyboardHIDUsage>()
     private var activeTouch: UITouch?
     private var origin = CGPoint.zero
     private var current = CGPoint.zero
     private var touchSteer: Float = 0
     private var touchBrake: Float = 0
-    private var touchThrottle: Float = 1
 
     override init(frame: CGRect) {
         super.init(frame: frame)
         backgroundColor = .clear
-        isMultipleTouchEnabled = true
+        isOpaque = false
+        contentMode = .redraw
     }
 
     required init?(coder: NSCoder) { fatalError() }
     override var canBecomeFirstResponder: Bool { true }
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
-        guard activeTouch == nil,
-              let touch = touches.first(where: { $0.location(in: self).y >= bounds.midY }) else { return }
+        guard activeTouch == nil, let touch = touches.first else { return }
         activeTouch = touch
         origin = touch.location(in: self)
         current = origin
@@ -36,21 +37,16 @@ final class InputView: UIView {
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
         guard let touch = activeTouch, touches.contains(touch) else { return }
         current = touch.location(in: self)
-        let horizontal = (current.x - origin.x) / steeringDistance
-        touchSteer = Float((horizontal < 0 ? -1 : 1) * logarithmicResponse(abs(horizontal)))
-        let downward = max(0, (current.y - origin.y) / brakeDistance)
-        // Ease off the accelerator over the first quarter, then build braking gently:
-        // cubic, so most of the drag only trims speed and full stop needs the whole distance.
-        touchThrottle = Float(max(0, 1 - downward / 0.25))
-        let brakeProgress = max(0, min(1, (downward - 0.25) / 0.75))
-        touchBrake = Float(brakeProgress * brakeProgress * brakeProgress)
+        // The anchor follows a thumb that overshoots, so reversing answers at once.
+        let reach = steeringDistance
+        origin.x = max(current.x - reach, min(current.x + reach, origin.x))
+        origin.y = max(origin.y, current.y - brakeDeadZone - brakeDistance)
+        origin.y = min(origin.y, current.y)
+        let horizontal = (current.x - origin.x) / reach
+        // Slightly soft round the centre for small corrections.
+        touchSteer = Float((horizontal < 0 ? -1 : 1) * pow(abs(horizontal), 1.25))
+        touchBrake = Float(max(0, min(1, (current.y - origin.y - brakeDeadZone) / brakeDistance)))
         setNeedsDisplay()
-    }
-
-    /// Maps a normalized gesture to a gentle logarithmic response, preserving endpoints.
-    private func logarithmicResponse(_ input: CGFloat) -> CGFloat {
-        let normalized = max(0, min(1, input))
-        return log1p(3 * normalized) / log1p(3)
     }
 
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
@@ -63,20 +59,28 @@ final class InputView: UIView {
 
     override func draw(_ rect: CGRect) {
         guard activeTouch != nil else { return }
-        let circle = CGRect(x: origin.x - controlDiameter / 2, y: origin.y - controlDiameter / 2,
-                            width: controlDiameter, height: controlDiameter)
-        UIColor(white: 0, alpha: 0.3).setFill()
-        UIColor(white: 1, alpha: 0.7).setStroke()
-        let ring = UIBezierPath(ovalIn: circle)
-        ring.lineWidth = 2
-        ring.fill()
-        ring.stroke()
+        let reach = steeringDistance
+        // Steering rail with a knob under the thumb.
+        let rail = UIBezierPath()
+        rail.move(to: CGPoint(x: origin.x - reach, y: origin.y))
+        rail.addLine(to: CGPoint(x: origin.x + reach, y: origin.y))
+        rail.lineWidth = 3
+        rail.lineCapStyle = .round
+        UIColor(white: 1, alpha: 0.22).setStroke()
+        rail.stroke()
+        let tick = UIBezierPath(rect: CGRect(x: origin.x - 1, y: origin.y - 7, width: 2, height: 14))
+        UIColor(white: 1, alpha: 0.35).setFill()
+        tick.fill()
 
-        let dx = max(-steeringDistance, min(steeringDistance, current.x - origin.x))
-        let dy = max(0, min(brakeDistance, current.y - origin.y))
-        UIColor(white: 1, alpha: 0.8).setFill()
-        UIBezierPath(ovalIn: CGRect(x: origin.x + dx - 10, y: origin.y + dy - 10,
-                                    width: 20, height: 20)).fill()
+        let braking = touchBrake > 0
+        let knob = CGPoint(x: current.x, y: origin.y + (braking ? CGFloat(touchBrake) * 26 : 0))
+        let color = braking ? UI.magenta : UI.cyan
+        color.withAlphaComponent(0.25).setFill()
+        UIBezierPath(ovalIn: CGRect(x: knob.x - 26, y: knob.y - 26, width: 52, height: 52)).fill()
+        color.withAlphaComponent(0.9).setStroke()
+        let ring = UIBezierPath(ovalIn: CGRect(x: knob.x - 17, y: knob.y - 17, width: 34, height: 34))
+        ring.lineWidth = 2.5
+        ring.stroke()
     }
 
     override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
@@ -98,7 +102,6 @@ final class InputView: UIView {
         activeTouch = nil
         touchSteer = 0
         touchBrake = 0
-        touchThrottle = 1
         setNeedsDisplay()
     }
 
@@ -111,6 +114,5 @@ final class InputView: UIView {
         let keyboard: Float = (keys.contains(.keyboardRightArrow) ? 1 : 0) - (keys.contains(.keyboardLeftArrow) ? 1 : 0)
         return keyboard != 0 ? keyboard : touchSteer
     }
-    var throttle: Float { keys.contains(.keyboardDownArrow) ? 0 : touchThrottle }
     var brake: Float { max(keys.contains(.keyboardDownArrow) ? 1 : 0, touchBrake) }
 }

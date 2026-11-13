@@ -29,10 +29,8 @@ targets:
             mkdir -p "$dst"
             rsync -a --delete "$src/" "$dst/"
           }
-          copy_folder "Cars"
           copy_folder "Audio"
         outputFiles:
-          - "$(BUILT_PRODUCTS_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Cars"
           - "$(BUILT_PRODUCTS_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Audio"
     settings:
       INFOPLIST_FILE: Resources/Info.plist

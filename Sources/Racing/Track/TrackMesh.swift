@@ -29,9 +29,10 @@ enum TrackSections {
             (0..<per).reduce(Float(0)) { $0 + path.samples[s * per + $1].curvature } / Float(per)
         }
         var rng = SplitMix64(seed: path.definition.seed &+ 303)
-        let accents: [DeckPattern] = [.chevrons, .barcode, .grate, .boost, .bands]
-        let motifs: [[DeckPattern]] = (0..<3).map { _ in
-            [.plain, .chevrons, .plain, accents.randomElement(using: &rng)!,
+        // Boost pads are a fixed part of the first motif, so every circuit has a steady supply.
+        let accents: [DeckPattern] = [.chevrons, .barcode, .grate, .bands]
+        let motifs: [[DeckPattern]] = (0..<3).map { m in
+            [.plain, .chevrons, .plain, m == 0 ? .boost : accents.randomElement(using: &rng)!,
              .plain, accents.randomElement(using: &rng)!]
         }
         let bend = bendCurvature
@@ -248,12 +249,6 @@ enum TrackMeshBuilder {
 
         let node = SCNNode(geometry: mesh.geometry(materials: materials, skipping: [barrierSlot]))
         node.name = "trackMesh"
-        let body = SCNPhysicsBody(type: .static, shape: SCNPhysicsShape(
-            geometry: mesh.collisionGeometry(),
-            options: [.type: SCNPhysicsShape.ShapeType.concavePolyhedron]))
-        body.categoryBitMask = PhysicsCategory.track
-        body.collisionBitMask = PhysicsCategory.car
-        node.physicsBody = body
 
         let root = SCNNode()
         root.name = "trackRoot"

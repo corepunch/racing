@@ -137,6 +137,25 @@ final class TrackPath {
         return samples[((index % stepCount) + stepCount) % stepCount]
     }
 
+    /// Metres between consecutive samples.
+    var step: Float { totalLength / Float(stepCount) }
+
+    /// The deck frame at any distance round the lap (wraps), interpolated between samples.
+    func frame(at distance: Float) -> PathSample {
+        let f = distance / step
+        let i = Int(f.rounded(.down))
+        let t = f - Float(i)
+        let a = sample(at: i), b = sample(at: i + 1)
+        return PathSample(
+            position: a.position + (b.position - a.position) * t,
+            forward: simd_normalize(a.forward + (b.forward - a.forward) * t),
+            right: simd_normalize(a.right + (b.right - a.right) * t),
+            up: simd_normalize(a.up + (b.up - a.up) * t),
+            arcLength: distance,
+            halfWidth: a.halfWidth + (b.halfWidth - a.halfWidth) * t,
+            curvature: a.curvature + (b.curvature - a.curvature) * t)
+    }
+
     // Projects a world XZ position to normalised [0,1] minimap coordinates.
     func minimapPosition(for world: SIMD3<Float>) -> SIMD2<Float> {
         let range = boundsMax - boundsMin

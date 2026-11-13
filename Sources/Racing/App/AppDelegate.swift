@@ -10,7 +10,7 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
     ) -> Bool {
         window = UIWindow(frame: UIScreen.main.bounds)
         window?.rootViewController = TrackVideoRecorder.runFromLaunchArguments()
-            ? UIViewController() : GameViewController()
+            ? UIViewController() : MenuViewController()
         window?.makeKeyAndVisible()
         return true
     }

@@ -4,20 +4,25 @@ Everything in a circuit is generated at launch from a `TrackDefinition`
 (`Sources/Racing/Track/TrackDefinition.swift`): the master curve and its
 deformers, the swept road hull, the city around it and every texture.
 
-Launch arguments: `-track <0...3>` picks a library circuit, `-seed <n>` generates
-a new one, `-autoDrive YES` runs the demo, `-selfDrive YES` has a simple driver steer the real
-physics car and print lap telemetry (the quickest check of handling changes). `-recordVideos <dir>` renders an
-overview, a start-line shot and a drive-through per circuit instead of starting
-the game (`-recordStillsOnly YES` for stills only).
+Launch arguments: `-autostart YES` skips the menu and starts a race; `-track <0...3>`
+picks a library circuit, `-seed <n>` generates a new one, `-ship <0...5>` picks the ship
+and `-laps <n>` the distance. `-autoDrive YES` runs the demo (every ship flown by the rival
+driver, no countdown). `-recordVideos <dir>` renders an overview, a start-line shot and a
+drive-through per circuit instead of starting the game (`-recordStillsOnly YES` for stills only).
 
-## Car physics check
+## Handling checks
 
-This opens a small SceneKit window on macOS and checks four-wheel ground contact,
-forward acceleration, right steering, braking, automatic reverse, and the return
-to forward drive on a flat surface using the
-production controller. Run from the repository root:
+`-driver <name>` replaces the player's thumb and prints race telemetry every two seconds
+(position, distance, speed, wall hits, seconds spent scraping). It is the quickest check of
+a handling or assist change:
+
+- `rival`: the rival driver flies the player's ship. The reference lap.
+- `casual`: steers a quarter of a second late and never airbrakes. Should finish mid-pack on Normal.
+- `handsoff`: no input at all. Should come last, with or without the wall guard; if it
+  stops being last, the assist has started to drive.
+
+Add `-menu.assist NO` to run any of them with the wall guard off.
 
 ```sh
-swiftc Sources/Racing/Game/PhysicsCategory.swift Sources/Racing/Car/CarController.swift Tools/check_car_collisions.swift -o /tmp/RacingCollisionCheck
-/tmp/RacingCollisionCheck
+xcrun simctl launch --console-pty booted com.racing.app -autostart YES -driver casual -laps 1
 ```
