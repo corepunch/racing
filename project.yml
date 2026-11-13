@@ -29,19 +29,11 @@ targets:
             mkdir -p "$dst"
             rsync -a --delete "$src/" "$dst/"
           }
-          copy_folder "Decorations"
           copy_folder "Cars"
           copy_folder "Audio"
-          copy_folder "Props"
-          copy_folder "Environment"
-          copy_folder "Textures"
         outputFiles:
-          - "$(BUILT_PRODUCTS_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Decorations"
           - "$(BUILT_PRODUCTS_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Cars"
           - "$(BUILT_PRODUCTS_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Audio"
-          - "$(BUILT_PRODUCTS_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Props"
-          - "$(BUILT_PRODUCTS_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Environment"
-          - "$(BUILT_PRODUCTS_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Textures"
     settings:
       INFOPLIST_FILE: Resources/Info.plist
       PRODUCT_BUNDLE_IDENTIFIER: com.racing.app

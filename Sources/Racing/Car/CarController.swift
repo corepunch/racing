@@ -19,7 +19,6 @@ final class CarController {
     var throttle: Float = 0
     var brake: Float = 0
     var steer: Float = 0
-    var surface: SurfaceType = .tarmac
     private(set) var isDrifting = false
     private(set) var driftIntensity: Float = 0
     var speed: Float { abs(Float(vehicle?.speedInKilometersPerHour ?? 0)) / 3.6 }
@@ -110,7 +109,6 @@ final class CarController {
             vehicle.setSteeringAngle(index < 2 ? steering : 0, forWheelAt: index)
             vehicle.applyEngineForce(engineForce * drive / 4, forWheelAt: index)
             vehicle.applyBrakingForce(brakeForce * braking / 4, forWheelAt: index)
-            vehicle.wheels[index].frictionSlip = surface == .tarmac ? 2.5 : 1.6
         }
     }
 

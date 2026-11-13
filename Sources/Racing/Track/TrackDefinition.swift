@@ -1,213 +1,196 @@
 import UIKit
 import simd
 
-/// Data-driven description of a circuit; everything else (road, terrain,
-/// textures, scenery) is generated from it.
-struct TrackDefinition {
-
-    struct Zone {
-        enum Kind { case tunnel, town }
-        var kind: Kind
-        /// Lap fractions in [0, 1).
-        var start: Float
-        var end: Float
-        /// Tunnels: extra mountain height above the tunnel roof.
-        var hill: Float = 0
-    }
-
-    struct SurfaceRange {
-        var start: Float
-        var end: Float
-        var surface: SurfaceType
-    }
-
-    enum WaterBody {
-        /// Sea on the side `direction` points to, shoreline at dot(xz, direction) == offset.
-        case coast(direction: SIMD2<Float>, offset: Float)
-        case lake(center: SIMD2<Float>, radius: Float)
-    }
-
-    enum RoofStyle { case gabled, flat, mixed }
-
-    /// Selects tree sprites and the forest-wall texture baked by Tools/bake_tree_sprites.swift.
-    enum ForestBiome: String { case alpine, temperate, coastal, arid }
-
-    struct Palette {
-        var grassA: SIMD3<Float>
-        var grassB: SIMD3<Float>
-        var rockA: SIMD3<Float>
-        var rockB: SIMD3<Float>
-        var sand: SIMD3<Float>
-        var facades: [SIMD3<Float>]
-        var roof: SIMD3<Float>
-    }
-
-    struct Environment {
-        var seed: UInt64
-        var baseHeight: Float
-        var hillAmplitude: Float
-        var hillScale: Float
-        var mountainAmplitude: Float
-        var waterLevel: Float?
-        var water: [WaterBody] = []
-        var palette: Palette
-        var treeDensity: Float
-        var forest: ForestBiome
-        var roofStyle: RoofStyle
-        /// Slope (0 = flat, 1 = vertical) where grass gives way to rock.
-        var rockSlope: Float = 0.55
-        var fogColor: UIColor
-        var fogStart: CGFloat = 90
-        var fogEnd: CGFloat = 520
-        var sunAngles: SIMD2<Float> = SIMD2(-.pi / 4.5, .pi / 6)
-    }
-
-    var name: String
-    var controlPoints: [SIMD3<Float>]
-    var halfWidth: Float = 5.5
-    var banking: Float = 1
-    var surfaces: [SurfaceRange] = []
-    var zones: [Zone] = []
-    var environment: Environment
+/// One distortion of the master curve. The curve starts as a flat circle of control
+/// points; radial deformers (`lobes`, `pinch`) and `hills` are evaluated per point,
+/// then the cartesian ones (`stretch`, `shear`, `warp`) are applied in list order.
+enum CurveDeformer {
+    /// Sinusoidal radius modulation: `count` bulges, `amount` as a fraction of the radius.
+    case lobes(count: Int, amount: Float, phase: Float)
+    /// Pulls the ring towards the centre around `angle` (radians), making a tight inward bend.
+    case pinch(angle: Float, amount: Float, width: Float)
+    /// Height wave in metres, `count` crests per lap.
+    case hills(count: Int, height: Float, phase: Float)
+    case stretch(x: Float, z: Float)
+    case shear(Float)
+    /// Smooth noise displacement in metres; `scale` is the feature size.
+    case warp(amount: Float, scale: Float, seed: UInt64)
 }
 
-// MARK: - Library
+/// The closed master curve everything is built from: the road is swept along it and
+/// the city, pylons and gates are placed in its (distance, lateral, height) frame.
+struct TrackCurve {
+    var radius: Float = 330
+    var pointCount = 24
+    var altitude: Float = 0
+    var deformers: [CurveDeformer]
+
+    func controlPoints() -> [SIMD3<Float>] {
+        var points = (0..<pointCount).map { i -> SIMD3<Float> in
+            let a = Float(i) / Float(pointCount) * 2 * .pi
+            var r = radius
+            var y = altitude
+            for deformer in deformers {
+                switch deformer {
+                case let .lobes(count, amount, phase):
+                    r += radius * amount * sin(Float(count) * a + phase)
+                case let .pinch(angle, amount, width):
+                    let d = remainder(a - angle, 2 * .pi)
+                    r -= radius * amount * exp(-(d * d) / (2 * width * width))
+                case let .hills(count, height, phase):
+                    y += height * sin(Float(count) * a + phase)
+                case .stretch, .shear, .warp:
+                    break
+                }
+            }
+            return SIMD3(cos(a) * r, y, sin(a) * r)
+        }
+        for deformer in deformers {
+            switch deformer {
+            case let .stretch(x, z):
+                points = points.map { SIMD3($0.x * x, $0.y, $0.z * z) }
+            case let .shear(k):
+                points = points.map { SIMD3($0.x + $0.z * k, $0.y, $0.z) }
+            case let .warp(amount, scale, seed):
+                let noise = Noise2D(seed: seed)
+                points = points.map { p in
+                    let dx = noise.fbm(p.x / scale, p.z / scale, octaves: 2)
+                    let dz = noise.fbm(p.x / scale + 37.3, p.z / scale - 11.9, octaves: 2)
+                    return SIMD3(p.x + dx * amount * 2, p.y, p.z + dz * amount * 2)
+                }
+            case .lobes, .pinch, .hills:
+                break
+            }
+        }
+        return points
+    }
+
+    /// A random but drivable loop: a few lobes, maybe a pinch, rolling height.
+    static func random(seed: UInt64) -> TrackCurve {
+        var rng = SplitMix64(seed: seed &* 7919 &+ 13)
+        var deformers: [CurveDeformer] = []
+        var counts = [2, 3, 4, 5].shuffled(using: &rng)
+        let amounts: [ClosedRange<Float>] = [0.12...0.22, 0.06...0.13, 0.03...0.07]
+        for range in amounts {
+            deformers.append(.lobes(count: counts.removeLast(), amount: rng.float(range),
+                                    phase: rng.float(0...(2 * .pi))))
+        }
+        for _ in 0..<Int.random(in: 0...2, using: &rng) {
+            deformers.append(.pinch(angle: rng.float(0...(2 * .pi)), amount: rng.float(0.14...0.26),
+                                    width: rng.float(0.18...0.3)))
+        }
+        deformers.append(.hills(count: 1, height: rng.float(14...26), phase: rng.float(0...(2 * .pi))))
+        deformers.append(.hills(count: 2, height: rng.float(7...14), phase: rng.float(0...(2 * .pi))))
+        deformers.append(.hills(count: Int.random(in: 3...4, using: &rng), height: rng.float(3...8),
+                                phase: rng.float(0...(2 * .pi))))
+        deformers.append(.stretch(x: rng.float(0.85...1.3), z: rng.float(0.85...1.3)))
+        deformers.append(.shear(rng.float(-0.25...0.25)))
+        deformers.append(.warp(amount: rng.float(8...18), scale: 260, seed: seed &+ 101))
+        return TrackCurve(radius: rng.float(300...360), deformers: deformers)
+    }
+}
+
+/// Colours that drive every generated texture, the sky and the lighting.
+struct TrackTheme {
+    var skyZenith: SIMD3<Float>
+    var skyHorizon: SIMD3<Float>
+    var skyGlow: SIMD3<Float>
+    var stars: Float
+    var fogStart: CGFloat = 140
+    var fogEnd: CGFloat = 1100
+    /// Primary and secondary emissive colours.
+    var neonA: SIMD3<Float>
+    var neonB: SIMD3<Float>
+    /// Painted markings (arrows, edge lines, hazard stripes).
+    var paint: SIMD3<Float>
+    /// Road deck metal and the darker structural hull.
+    var metal: SIMD3<Float>
+    var hull: SIMD3<Float>
+    var window: SIMD3<Float>
+    var sunColor: SIMD3<Float>
+    var sunIntensity: CGFloat
+    var sunAngles: SIMD2<Float>
+    var ambient: CGFloat
+    var environment: CGFloat
+
+    static let neonNight = TrackTheme(
+        skyZenith: SIMD3(0.015, 0.02, 0.07), skyHorizon: SIMD3(0.17, 0.07, 0.26),
+        skyGlow: SIMD3(0.95, 0.25, 0.60), stars: 1,
+        neonA: SIMD3(0.10, 0.90, 1.00), neonB: SIMD3(1.00, 0.15, 0.60),
+        paint: SIMD3(0.95, 0.76, 0.12), metal: SIMD3(0.62, 0.66, 0.74), hull: SIMD3(0.20, 0.22, 0.28),
+        window: SIMD3(1.00, 0.80, 0.50),
+        sunColor: SIMD3(0.62, 0.70, 1.00), sunIntensity: 700, sunAngles: SIMD2(-.pi / 3.2, .pi / 5),
+        ambient: 140, environment: 1.6)
+
+    static let ember = TrackTheme(
+        skyZenith: SIMD3(0.10, 0.09, 0.26), skyHorizon: SIMD3(0.78, 0.36, 0.20),
+        skyGlow: SIMD3(1.00, 0.62, 0.18), stars: 0.3,
+        neonA: SIMD3(1.00, 0.50, 0.08), neonB: SIMD3(0.10, 0.92, 0.78),
+        paint: SIMD3(0.93, 0.93, 0.90), metal: SIMD3(0.72, 0.64, 0.57), hull: SIMD3(0.26, 0.21, 0.20),
+        window: SIMD3(1.00, 0.70, 0.35),
+        sunColor: SIMD3(1.00, 0.66, 0.40), sunIntensity: 1100, sunAngles: SIMD2(-.pi / 9, -.pi / 3),
+        ambient: 220, environment: 1.3)
+
+    static let cryo = TrackTheme(
+        skyZenith: SIMD3(0.20, 0.42, 0.74), skyHorizon: SIMD3(0.74, 0.84, 0.93),
+        skyGlow: SIMD3(1.00, 0.97, 0.90), stars: 0,
+        fogStart: 220, fogEnd: 1300,
+        neonA: SIMD3(0.15, 0.55, 1.00), neonB: SIMD3(1.00, 0.30, 0.08),
+        paint: SIMD3(0.95, 0.33, 0.10), metal: SIMD3(0.82, 0.84, 0.88), hull: SIMD3(0.46, 0.50, 0.56),
+        window: SIMD3(0.75, 0.90, 1.00),
+        sunColor: SIMD3(1.00, 0.97, 0.92), sunIntensity: 1500, sunAngles: SIMD2(-.pi / 3.5, .pi / 6),
+        ambient: 420, environment: 1.1)
+
+    static let acid = TrackTheme(
+        skyZenith: SIMD3(0.01, 0.05, 0.05), skyHorizon: SIMD3(0.10, 0.26, 0.15),
+        skyGlow: SIMD3(0.55, 1.00, 0.25), stars: 0.6,
+        neonA: SIMD3(0.60, 1.00, 0.10), neonB: SIMD3(0.62, 0.25, 1.00),
+        paint: SIMD3(0.92, 0.92, 0.25), metal: SIMD3(0.58, 0.66, 0.62), hull: SIMD3(0.16, 0.22, 0.20),
+        window: SIMD3(0.70, 1.00, 0.60),
+        sunColor: SIMD3(0.70, 1.00, 0.80), sunIntensity: 650, sunAngles: SIMD2(-.pi / 3, -.pi / 4),
+        ambient: 150, environment: 1.6)
+
+    static let all: [TrackTheme] = [.neonNight, .ember, .cryo, .acid]
+}
+
+/// Everything about a circuit derives from this: the curve, the seed for textures
+/// and city placement, and the theme.
+struct TrackDefinition {
+    var name: String
+    var seed: UInt64
+    var curve: TrackCurve
+    var theme: TrackTheme
+    /// Deck half-width in metres, and how far it swells and narrows along the lap.
+    var halfWidth: Float = 8
+    var widthVariation: Float = 1.5
+    var banking: Float = 1
+}
 
 enum TrackLibrary {
-    typealias Zone = TrackDefinition.Zone
-    typealias SurfaceRange = TrackDefinition.SurfaceRange
-    typealias Environment = TrackDefinition.Environment
-    typealias Palette = TrackDefinition.Palette
+    static let all: [TrackDefinition] = [
+        // Hand-tuned: three lobes with one hard inward bend and a long descent.
+        TrackDefinition(
+            name: "Neon Meridian", seed: 11,
+            curve: TrackCurve(radius: 330, deformers: [
+                .lobes(count: 3, amount: 0.17, phase: 0.4),
+                .lobes(count: 5, amount: 0.06, phase: 2.1),
+                .pinch(angle: 3.9, amount: 0.24, width: 0.24),
+                .hills(count: 1, height: 22, phase: 1.0),
+                .hills(count: 3, height: 7, phase: 0.3),
+                .stretch(x: 1.25, z: 0.9),
+                .warp(amount: 12, scale: 260, seed: 5),
+            ]),
+            theme: .neonNight),
+        TrackDefinition(name: "Ember Skyway", seed: 23, curve: .random(seed: 23), theme: .ember),
+        TrackDefinition(name: "Cryo Loop", seed: 37, curve: .random(seed: 37), theme: .cryo,
+                        halfWidth: 9, widthVariation: 2),
+        TrackDefinition(name: "Acid Spire", seed: 53, curve: .random(seed: 53), theme: .acid,
+                        banking: 1.3),
+    ]
 
-    static let all: [TrackDefinition] = [alpinePass, coastalHighway, oldTown, canyonLakes]
-
-    static let alpinePass = TrackDefinition(
-        name: "Alpine Pass",
-        controlPoints: [
-            SIMD3(   0, 10, -300), SIMD3( 170, 14, -300), SIMD3( 290, 21, -240),
-            SIMD3( 240, 25, -145), SIMD3( 350, 30,  -60), SIMD3( 380, 34,   60),
-            SIMD3( 290, 30,  145), SIMD3( 220, 27,  110), SIMD3( 155, 22,  205),
-            SIMD3(  30, 17,  285), SIMD3(-100, 12,  260), SIMD3(-150, 10,  165),
-            SIMD3(-260,  9,  180), SIMD3(-350,  7,   90), SIMD3(-300,  8,    0),
-            SIMD3(-365,  8, -110), SIMD3(-300,  9, -230), SIMD3(-160,  9, -285),
-        ],
-        banking: 1,
-        surfaces: [SurfaceRange(start: 0.44, end: 0.54, surface: .gravel)],
-        zones: [
-            Zone(kind: .tunnel, start: 0.25, end: 0.36, hill: 34),
-            Zone(kind: .town, start: 0.62, end: 0.76),
-        ],
-        environment: Environment(
-            seed: 11, baseHeight: 14, hillAmplitude: 22, hillScale: 230,
-            mountainAmplitude: 150, waterLevel: 2,
-            water: [.lake(center: SIMD2(40, 0), radius: 120)],
-            palette: Palette(
-                grassA: SIMD3(0.22, 0.38, 0.16), grassB: SIMD3(0.36, 0.48, 0.20),
-                rockA: SIMD3(0.42, 0.41, 0.40), rockB: SIMD3(0.62, 0.60, 0.57),
-                sand: SIMD3(0.55, 0.52, 0.44),
-                facades: [SIMD3(0.92, 0.88, 0.78), SIMD3(0.85, 0.80, 0.70), SIMD3(0.95, 0.94, 0.90),
-                          SIMD3(0.72, 0.56, 0.40)],
-                roof: SIMD3(0.36, 0.22, 0.16)),
-            treeDensity: 1.0, forest: .alpine, roofStyle: .gabled, rockSlope: 0.5,
-            fogColor: UIColor(red: 0.66, green: 0.74, blue: 0.78, alpha: 1)))
-
-    static let coastalHighway = TrackDefinition(
-        name: "Coastal Highway",
-        controlPoints: [
-            SIMD3(-200, 14, -350), SIMD3( -20, 10, -400), SIMD3( 140,  8, -365),
-            SIMD3( 205,  6, -240), SIMD3( 195,  6,  -90), SIMD3( 225,  8,   60),
-            SIMD3( 195,  7,  200), SIMD3( 140,  5,  330), SIMD3(   0,  6,  395),
-            SIMD3(-150, 12,  360), SIMD3(-235, 18,  220), SIMD3(-265, 22,   50),
-            SIMD3(-240, 20, -120), SIMD3(-265, 16, -260),
-        ],
-        halfWidth: 5.5,
-        banking: 0.7,
-        zones: [
-            Zone(kind: .tunnel, start: 0.37, end: 0.43, hill: 22),
-            Zone(kind: .town, start: 0.53, end: 0.66),
-        ],
-        environment: Environment(
-            seed: 23, baseHeight: 12, hillAmplitude: 14, hillScale: 200,
-            mountainAmplitude: 90, waterLevel: 0,
-            water: [.coast(direction: SIMD2(1, 0), offset: 228)],
-            palette: Palette(
-                grassA: SIMD3(0.36, 0.44, 0.20), grassB: SIMD3(0.54, 0.54, 0.28),
-                rockA: SIMD3(0.55, 0.50, 0.42), rockB: SIMD3(0.74, 0.68, 0.58),
-                sand: SIMD3(0.86, 0.78, 0.60),
-                facades: [SIMD3(0.97, 0.96, 0.92), SIMD3(0.55, 0.75, 0.88), SIMD3(0.98, 0.86, 0.62),
-                          SIMD3(0.92, 0.70, 0.62)],
-                roof: SIMD3(0.70, 0.36, 0.22)),
-            treeDensity: 0.45, forest: .coastal, roofStyle: .mixed, rockSlope: 0.6,
-            fogColor: UIColor(red: 0.70, green: 0.79, blue: 0.84, alpha: 1),
-            fogStart: 120, fogEnd: 600))
-
-    static let oldTown = TrackDefinition(
-        name: "Old Town",
-        controlPoints: [
-            SIMD3(   0, 5, -200), SIMD3( 120, 5, -205), SIMD3( 200, 6, -160),
-            SIMD3( 215, 7,  -60), SIMD3( 265, 8,   10), SIMD3( 320, 9,   85),
-            SIMD3( 300, 10, 195), SIMD3( 180, 9,  225), SIMD3(  60, 7,  180),
-            SIMD3( -40, 6,  235), SIMD3(-160, 5,  215), SIMD3(-225, 5,  100),
-            SIMD3(-200, 4,  -20), SIMD3(-245, 4, -120), SIMD3(-150, 5, -195),
-        ],
-        banking: 0.4,
-        zones: [
-            Zone(kind: .town, start: 0.05, end: 0.40),
-            Zone(kind: .tunnel, start: 0.45, end: 0.52, hill: 6),
-            Zone(kind: .town, start: 0.57, end: 0.93),
-        ],
-        environment: Environment(
-            seed: 37, baseHeight: 6, hillAmplitude: 8, hillScale: 180,
-            mountainAmplitude: 60, waterLevel: 1,
-            water: [.lake(center: SIMD2(40, 10), radius: 70)],
-            palette: Palette(
-                grassA: SIMD3(0.24, 0.40, 0.18), grassB: SIMD3(0.36, 0.46, 0.22),
-                rockA: SIMD3(0.45, 0.43, 0.40), rockB: SIMD3(0.60, 0.58, 0.54),
-                sand: SIMD3(0.62, 0.58, 0.48),
-                facades: [SIMD3(0.90, 0.80, 0.62), SIMD3(0.78, 0.52, 0.40), SIMD3(0.95, 0.92, 0.84),
-                          SIMD3(0.70, 0.72, 0.62), SIMD3(0.86, 0.66, 0.50)],
-                roof: SIMD3(0.55, 0.26, 0.18)),
-            treeDensity: 0.6, forest: .temperate, roofStyle: .gabled,
-            fogColor: UIColor(red: 0.68, green: 0.73, blue: 0.76, alpha: 1)))
-
-    static let canyonLakes = TrackDefinition(
-        name: "Canyon Lakes",
-        controlPoints: [
-            SIMD3(   0, 20, -300), SIMD3( 180, 18, -320), SIMD3( 320, 24, -240),
-            SIMD3( 365, 30,  -80), SIMD3( 300, 36,   60), SIMD3( 330, 30,  200),
-            SIMD3( 220, 22,  320), SIMD3(  60, 16,  300), SIMD3( -60, 13,  200),
-            SIMD3(-200, 12,  245), SIMD3(-330, 14,  150), SIMD3(-350, 18,  -20),
-            SIMD3(-260, 22, -160), SIMD3(-140, 22, -280),
-        ],
-        banking: 1.2,
-        surfaces: [
-            SurfaceRange(start: 0.12, end: 0.28, surface: .dirt),
-            SurfaceRange(start: 0.50, end: 0.70, surface: .dirt),
-            SurfaceRange(start: 0.70, end: 0.82, surface: .gravel),
-        ],
-        zones: [Zone(kind: .tunnel, start: 0.31, end: 0.40, hill: 40)],
-        environment: Environment(
-            seed: 53, baseHeight: 22, hillAmplitude: 18, hillScale: 160,
-            mountainAmplitude: 170, waterLevel: 8,
-            water: [.lake(center: SIMD2(20, -10), radius: 150),
-                    .lake(center: SIMD2(-520, 40), radius: 120)],
-            palette: Palette(
-                grassA: SIMD3(0.62, 0.42, 0.26), grassB: SIMD3(0.72, 0.56, 0.34),
-                rockA: SIMD3(0.62, 0.32, 0.20), rockB: SIMD3(0.82, 0.52, 0.34),
-                sand: SIMD3(0.86, 0.72, 0.52),
-                facades: [SIMD3(0.86, 0.66, 0.46)], roof: SIMD3(0.55, 0.30, 0.20)),
-            treeDensity: 0.18, forest: .arid, roofStyle: .flat, rockSlope: 0.4,
-            fogColor: UIColor(red: 0.80, green: 0.72, blue: 0.64, alpha: 1),
-            fogStart: 120, fogEnd: 620,
-            sunAngles: SIMD2(-.pi / 3.6, -.pi / 5)))
-}
-
-extension TrackDefinition {
-    func surface(at progress: Float) -> SurfaceType {
-        surfaces.first { progress >= $0.start && progress < $0.end }?.surface ?? .tarmac
-    }
-
-    func zone(at progress: Float) -> Zone? {
-        zones.first { progress >= $0.start && progress < $0.end }
+    /// Any seed gives a complete circuit: curve, city and textures.
+    static func generated(seed: UInt64) -> TrackDefinition {
+        TrackDefinition(name: "Sector \(seed)", seed: seed, curve: .random(seed: seed),
+                        theme: TrackTheme.all[Int(seed % UInt64(TrackTheme.all.count))])
     }
 }

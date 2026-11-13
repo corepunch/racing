@@ -72,7 +72,17 @@ struct MeshBuilder {
         if top { flatQuad(topSlot ?? slot, t[3], t[2], t[1], t[0], color: color) }
     }
 
-    func geometry(materials: [SCNMaterial]) -> SCNGeometry {
+    /// Position-only mesh of every slot, for static collision shapes.
+    func collisionGeometry() -> SCNGeometry {
+        let all = indices.flatMap { $0 }
+        let data = all.withUnsafeBufferPointer { Data(buffer: $0) }
+        let element = SCNGeometryElement(data: data, primitiveType: .triangles,
+                                         primitiveCount: all.count / 3, bytesPerIndex: 4)
+        return SCNGeometry(sources: [Self.source(positions, semantic: .vertex)], elements: [element])
+    }
+
+    /// `skipping` leaves out slots that exist only for collision.
+    func geometry(materials: [SCNMaterial], skipping: Set<Int> = []) -> SCNGeometry {
         var sources = [
             Self.source(positions, semantic: .vertex),
             Self.source(normals, semantic: .normal),
@@ -93,7 +103,7 @@ struct MeshBuilder {
 
         var elements = [SCNGeometryElement]()
         var used = [SCNMaterial]()
-        for (slot, list) in indices.enumerated() where !list.isEmpty {
+        for (slot, list) in indices.enumerated() where !list.isEmpty && !skipping.contains(slot) {
             let data = list.withUnsafeBufferPointer { Data(buffer: $0) }
             elements.append(SCNGeometryElement(data: data, primitiveType: .triangles,
                                                primitiveCount: list.count / 3, bytesPerIndex: 4))

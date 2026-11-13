@@ -9,14 +9,11 @@
 /* Begin PBXBuildFile section */
 		A11111111111111111111111 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A22222222222222222222222 /* Assets.xcassets */; };
 		10B1FC7BDD9747974A412DFE /* CarStyle.swift in Sources */ = {isa = PBXBuildFile; fileRef = EBD5324DC0CD02A58244E5BD /* CarStyle.swift */; };
-		12B570A003C6AF849514C61A /* Terrain.swift in Sources */ = {isa = PBXBuildFile; fileRef = 120A446F9EB2A1422CF69065 /* Terrain.swift */; };
 		175E6960DEBBAE59561F4DCA /* TrackScenery.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1016E4E71A516656B47A968E /* TrackScenery.swift */; };
 		232CEB78810D1D4EC723B85A /* CarNode.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8ECB0436D01110ADD67781A0 /* CarNode.swift */; };
-		3B8615F0C5A0AFC9D6101C8A /* RaceProps.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA36E7C9B0CA803519A9AC30 /* RaceProps.swift */; };
 		402D21657ABDE9ADB397F760 /* ProceduralTextures.swift in Sources */ = {isa = PBXBuildFile; fileRef = 509884DF552021E8F551402F /* ProceduralTextures.swift */; };
 		41A2154F27E5F3683316EEDE /* InputManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C8D312FD438ABF11F3EFB90E /* InputManager.swift */; };
 		4C25FC423878CD8055CB687A /* GameScene.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2976270C4AEB0FD48286BA9A /* GameScene.swift */; };
-		4FEB427C3F842EE633434955 /* Forest.swift in Sources */ = {isa = PBXBuildFile; fileRef = 449FB28729B089F6305DC757 /* Forest.swift */; };
 		71EB1ED378E1FDFD1BE2C0E6 /* TrackMesh.swift in Sources */ = {isa = PBXBuildFile; fileRef = BAC6DE652544DEF66789E4B1 /* TrackMesh.swift */; };
 		783A1CD5301C6416A08C30FC /* MeshBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3AB0902429CABA2316A23265 /* MeshBuilder.swift */; };
 		7AEBECCE46FD4C1C3CD88D25 /* Noise.swift in Sources */ = {isa = PBXBuildFile; fileRef = 89F3B6FD415CEAD98A95DDCD /* Noise.swift */; };
@@ -34,18 +31,15 @@
 		A22222222222222222222222 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Resources/Assets.xcassets; sourceTree = "<group>"; };
 		08877146163F79351EDC92DB /* HUDScene.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HUDScene.swift; sourceTree = "<group>"; };
 		1016E4E71A516656B47A968E /* TrackScenery.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrackScenery.swift; sourceTree = "<group>"; };
-		120A446F9EB2A1422CF69065 /* Terrain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Terrain.swift; sourceTree = "<group>"; };
 		1C949E642EE83538E4C17BB2 /* CarController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CarController.swift; sourceTree = "<group>"; };
 		2976270C4AEB0FD48286BA9A /* GameScene.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GameScene.swift; sourceTree = "<group>"; };
 		3AB0902429CABA2316A23265 /* MeshBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeshBuilder.swift; sourceTree = "<group>"; };
 		3DA32AB07E059F039A793E11 /* TrackVideoRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrackVideoRecorder.swift; sourceTree = "<group>"; };
-		449FB28729B089F6305DC757 /* Forest.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Forest.swift; sourceTree = "<group>"; };
 		4A8E37C2E77699BBE3315BCB /* TrackDefinition.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrackDefinition.swift; sourceTree = "<group>"; };
 		509884DF552021E8F551402F /* ProceduralTextures.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProceduralTextures.swift; sourceTree = "<group>"; };
 		548DBA20689BABBA920B643B /* Racing.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Racing.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		89F3B6FD415CEAD98A95DDCD /* Noise.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Noise.swift; sourceTree = "<group>"; };
 		8ECB0436D01110ADD67781A0 /* CarNode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CarNode.swift; sourceTree = "<group>"; };
-		BA36E7C9B0CA803519A9AC30 /* RaceProps.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RaceProps.swift; sourceTree = "<group>"; };
 		BAC6DE652544DEF66789E4B1 /* TrackMesh.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrackMesh.swift; sourceTree = "<group>"; };
 		C60D13A1A7BAB49CF402A097 /* GameViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GameViewController.swift; sourceTree = "<group>"; };
 		C86F141A7D1281F5BF81331B /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
@@ -100,12 +94,9 @@
 		9C635F3E889376A54678D444 /* Procedural */ = {
 			isa = PBXGroup;
 			children = (
-				449FB28729B089F6305DC757 /* Forest.swift */,
 				3AB0902429CABA2316A23265 /* MeshBuilder.swift */,
 				89F3B6FD415CEAD98A95DDCD /* Noise.swift */,
 				509884DF552021E8F551402F /* ProceduralTextures.swift */,
-				BA36E7C9B0CA803519A9AC30 /* RaceProps.swift */,
-				120A446F9EB2A1422CF69065 /* Terrain.swift */,
 				1016E4E71A516656B47A968E /* TrackScenery.swift */,
 			);
 			path = Procedural;
@@ -235,16 +226,12 @@
 			outputFileListPaths = (
 			);
 			outputPaths = (
-				"$(BUILT_PRODUCTS_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Decorations",
 				"$(BUILT_PRODUCTS_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Cars",
 				"$(BUILT_PRODUCTS_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Audio",
-				"$(BUILT_PRODUCTS_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Props",
-				"$(BUILT_PRODUCTS_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Environment",
-				"$(BUILT_PRODUCTS_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Textures",
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "set -e\ncopy_folder() {\n  local src=\"$SRCROOT/Resources/$1\"\n  local dst=\"$BUILT_PRODUCTS_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/$1\"\n  mkdir -p \"$dst\"\n  rsync -a --delete \"$src/\" \"$dst/\"\n}\ncopy_folder \"Decorations\"\ncopy_folder \"Cars\"\ncopy_folder \"Audio\"\ncopy_folder \"Props\"\ncopy_folder \"Environment\"\ncopy_folder \"Textures\"\n";
+			shellScript = "set -e\ncopy_folder() {\n  local src=\"$SRCROOT/Resources/$1\"\n  local dst=\"$BUILT_PRODUCTS_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/$1\"\n  mkdir -p \"$dst\"\n  rsync -a --delete \"$src/\" \"$dst/\"\n}\ncopy_folder \"Cars\"\ncopy_folder \"Audio\"\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
@@ -257,7 +244,6 @@
 				949386C6A8FAC8641222F200 /* CarController.swift in Sources */,
 				232CEB78810D1D4EC723B85A /* CarNode.swift in Sources */,
 				10B1FC7BDD9747974A412DFE /* CarStyle.swift in Sources */,
-				4FEB427C3F842EE633434955 /* Forest.swift in Sources */,
 				4C25FC423878CD8055CB687A /* GameScene.swift in Sources */,
 				D0CC42B797B2D40A805122E1 /* GameViewController.swift in Sources */,
 				F353C12D8AAFAB8BE8A7890F /* HUDScene.swift in Sources */,
@@ -266,8 +252,6 @@
 				7AEBECCE46FD4C1C3CD88D25 /* Noise.swift in Sources */,
 				E31191D58CEDA0F9F1FE1ED1 /* PhysicsCategory.swift in Sources */,
 				402D21657ABDE9ADB397F760 /* ProceduralTextures.swift in Sources */,
-				3B8615F0C5A0AFC9D6101C8A /* RaceProps.swift in Sources */,
-				12B570A003C6AF849514C61A /* Terrain.swift in Sources */,
 				D7C42D24C170807EA5523319 /* TrackDefinition.swift in Sources */,
 				71EB1ED378E1FDFD1BE2C0E6 /* TrackMesh.swift in Sources */,
 				BF9C22D6E9BBFC5C2B486D8D /* TrackPath.swift in Sources */,

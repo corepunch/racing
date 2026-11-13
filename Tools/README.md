@@ -1,32 +1,14 @@
-# Prop Placement
+# Generated tracks
 
-`TrackDecorations` normalizes imported templates before placing them:
+Everything in a circuit is generated at launch from a `TrackDefinition`
+(`Sources/Racing/Track/TrackDefinition.swift`): the master curve and its
+deformers, the swept road hull, the city around it and every texture.
 
-- Y is up; local -Z is forward; local +X is right.
-- The pivot is the horizontal bounding-box center at the lowest Y coordinate.
-- Axis corrections happen inside the template, before centering and placement.
-- Barriers and fences rotate 90 degrees around Y so their long axis follows -Z.
-- Arches span X. Grandstand entrances and lamp faces point toward -Z.
-- Placement aligns -Z to the track tangent or the inward road-facing direction.
-- Source geometry, materials, dimensions, and existing placement scales are retained.
+Launch arguments: `-track <0...3>` picks a library circuit, `-seed <n>` generates
+a new one, `-autoDrive YES` runs the demo. `-recordVideos <dir>` renders an
+overview, a start-line shot and a drive-through per circuit instead of starting
+the game (`-recordStillsOnly YES` for stills only).
 
-Do not compensate for an asset's native pivot or axes at individual call sites.
-Normalize a newly introduced asset in the template loader instead.
-
-## Regression Check
-
-Run from the repository root on macOS. This compiles the production car and
-track code and loads the real resources; no simulator or game build is needed.
-It checks truck dimensions and grounding, road markings and UV continuity,
-and prop placement. The four Kenney trucks use 1.4x scale: 2.10 m wide and
-3.92-4.06 m long, fitting the 3.67 m lanes.
-
-```sh
-mkdir -p /tmp/RacingPropsCheck.app/Contents/MacOS
-ln -sfn "$PWD/Resources" /tmp/RacingPropsCheck.app/Contents/Resources
-swiftc Sources/Racing/Car/CarStyle.swift Sources/Racing/Car/CarNode.swift Sources/Racing/Track/TrackPath.swift Sources/Racing/Track/TrackMesh.swift Sources/Racing/Game/PhysicsCategory.swift Tools/check_prop_placement.swift -o /tmp/RacingPropsCheck.app/Contents/MacOS/RacingPropsCheck
-/tmp/RacingPropsCheck.app/Contents/MacOS/RacingPropsCheck
-```
 ## Car physics check
 
 This opens a small SceneKit window on macOS and checks four-wheel ground contact,

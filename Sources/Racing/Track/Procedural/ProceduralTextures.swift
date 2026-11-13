@@ -1,343 +1,484 @@
 import UIKit
+import SceneKit
 import simd
 
-/// CPU-generated, tileable textures. Everything is seeded so tracks look identical every launch.
+/// One shaded point of a generated surface.
+struct Texel {
+    var albedo = SIMD3<Float>(repeating: 0.5)
+    var metal: Float = 1
+    var rough: Float = 0.4
+    var emission = SIMD3<Float>.zero
+    /// Relief used to derive the normal map (positive = raised).
+    var height: Float = 0
+
+    /// Opaque paint over the metal. `alpha` should already include wear.
+    mutating func paint(_ color: SIMD3<Float>, _ alpha: Float) {
+        albedo = simd_mix(albedo, color, SIMD3(repeating: alpha))
+        metal = mix(metal, 0, alpha)
+        rough = mix(rough, 0.62, alpha)
+        height += alpha * 0.04
+    }
+
+    /// A light source set into the surface.
+    mutating func glow(_ color: SIMD3<Float>, _ mask: Float) {
+        albedo = simd_mix(albedo, color * 0.25, SIMD3(repeating: mask))
+        metal = mix(metal, 0, mask)
+        rough = mix(rough, 0.3, mask)
+        emission += color * mask
+    }
+}
+
+/// The PBR maps baked from one `Texel` shader.
+struct TextureSet {
+    let albedo: UIImage
+    /// Metalness in red, roughness in green.
+    let surface: UIImage
+    let emission: UIImage
+    let normal: UIImage
+
+    /// `tile` is how many UV units one copy of the texture covers on each axis.
+    func material(name: String, tile: SIMD2<Float> = SIMD2(1, 1), glow: CGFloat = 1) -> SCNMaterial {
+        let m = SCNMaterial()
+        m.name = name
+        m.lightingModel = .physicallyBased
+        m.diffuse.contents = albedo
+        m.metalness.contents = surface
+        m.metalness.textureComponents = .red
+        m.roughness.contents = surface
+        m.roughness.textureComponents = .green
+        m.emission.contents = emission
+        m.emission.intensity = glow
+        m.normal.contents = normal
+        let transform = SCNMatrix4MakeScale(1 / tile.x, 1 / tile.y, 1)
+        for property in [m.diffuse, m.metalness, m.roughness, m.emission, m.normal] {
+            property.wrapS = .repeat
+            property.wrapT = .repeat
+            property.mipFilter = .linear
+            property.maxAnisotropy = 8
+            property.contentsTransform = transform
+        }
+        return m
+    }
+}
+
+/// CPU-generated, tileable textures. Everything is seeded so a track looks identical every launch.
 enum ProceduralTextures {
 
     // MARK: - Image plumbing
 
-    /// Renders `shade(u, v)` (u, v in [0, 1)) into an sRGB image, rows in parallel.
-    static func image(width: Int, height: Int, _ shade: (Float, Float) -> SIMD3<Float>) -> UIImage {
-        var pixels = [UInt8](repeating: 255, count: width * height * 4)
-        pixels.withUnsafeMutableBufferPointer { buf in
-            let base = buf.baseAddress!
-            DispatchQueue.concurrentPerform(iterations: height) { y in
-                let v = (Float(y) + 0.5) / Float(height)
-                for x in 0..<width {
-                    let c = simd_clamp(shade((Float(x) + 0.5) / Float(width), v), .zero, SIMD3(repeating: 1))
-                    let o = (y * width + x) * 4
-                    base[o] = UInt8(c.x * 255)
-                    base[o + 1] = UInt8(c.y * 255)
-                    base[o + 2] = UInt8(c.z * 255)
-                }
-            }
-        }
-        let data = Data(pixels) as CFData
+    private static func makeImage(_ pixels: UnsafeMutablePointer<UInt8>, width: Int, height: Int,
+                                  linear: Bool = false) -> UIImage {
+        let data = Data(bytes: pixels, count: width * height * 4) as CFData
+        let space = CGColorSpace(name: linear ? CGColorSpace.linearSRGB : CGColorSpace.sRGB)!
         let cg = CGImage(width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 32,
-                         bytesPerRow: width * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                         bytesPerRow: width * 4, space: space,
                          bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.noneSkipLast.rawValue),
                          provider: CGDataProvider(data: data)!, decode: nil,
                          shouldInterpolate: true, intent: .defaultIntent)!
         return UIImage(cgImage: cg)
     }
 
-    /// Tangent-space normal map from a tileable height function.
-    static func normalMap(size: Int, strength: Float, _ height: (Float, Float) -> Float) -> UIImage {
-        let e = 1 / Float(size)
-        return image(width: size, height: size) { u, v in
-            let dx = height(u + e, v) - height(u - e, v)
-            let dy = height(u, v + e) - height(u, v - e)
-            let n = simd_normalize(SIMD3(-dx * strength, -dy * strength, 1))
-            return n * 0.5 + 0.5
+    @inline(__always) private static func store(_ c: SIMD3<Float>, _ p: UnsafeMutablePointer<UInt8>) {
+        let v = simd_clamp(c, .zero, SIMD3(repeating: 1)) * 255
+        p[0] = UInt8(v.x); p[1] = UInt8(v.y); p[2] = UInt8(v.z); p[3] = 255
+    }
+
+    /// Renders `shade(u, v)` (u, v in [0, 1)) into an sRGB image, rows in parallel.
+    static func image(width: Int, height: Int, _ shade: (Float, Float) -> SIMD3<Float>) -> UIImage {
+        let pixels = UnsafeMutablePointer<UInt8>.allocate(capacity: width * height * 4)
+        defer { pixels.deallocate() }
+        DispatchQueue.concurrentPerform(iterations: height) { y in
+            let v = (Float(y) + 0.5) / Float(height)
+            for x in 0..<width {
+                store(shade((Float(x) + 0.5) / Float(width), v), pixels + (y * width + x) * 4)
+            }
+        }
+        return makeImage(pixels, width: width, height: height)
+    }
+
+    /// Bakes albedo, metal/rough, emission and a normal map from one shader, rows in parallel.
+    /// `shade` receives exact texture coordinates and must tile on both axes.
+    static func bake(width: Int, height: Int, bump: Float = 2.5,
+                     _ shade: (Float, Float) -> Texel) -> TextureSet {
+        let count = width * height
+        let albedo = UnsafeMutablePointer<UInt8>.allocate(capacity: count * 4)
+        let surface = UnsafeMutablePointer<UInt8>.allocate(capacity: count * 4)
+        let emission = UnsafeMutablePointer<UInt8>.allocate(capacity: count * 4)
+        let normal = UnsafeMutablePointer<UInt8>.allocate(capacity: count * 4)
+        let relief = UnsafeMutablePointer<Float>.allocate(capacity: count)
+        defer { albedo.deallocate(); surface.deallocate(); emission.deallocate(); normal.deallocate(); relief.deallocate() }
+
+        DispatchQueue.concurrentPerform(iterations: height) { y in
+            let v = (Float(y) + 0.5) / Float(height)
+            for x in 0..<width {
+                let t = shade((Float(x) + 0.5) / Float(width), v)
+                let i = y * width + x
+                store(t.albedo, albedo + i * 4)
+                store(SIMD3(t.metal, t.rough, 0), surface + i * 4)
+                store(t.emission, emission + i * 4)
+                relief[i] = t.height
+            }
+        }
+        DispatchQueue.concurrentPerform(iterations: height) { y in
+            let up = ((y - 1 + height) % height) * width, down = ((y + 1) % height) * width
+            for x in 0..<width {
+                let dx = relief[y * width + (x + 1) % width] - relief[y * width + (x - 1 + width) % width]
+                let dy = relief[down + x] - relief[up + x]
+                let n = simd_normalize(SIMD3(-dx * bump, -dy * bump, 1))
+                store(n * 0.5 + 0.5, normal + (y * width + x) * 4)
+            }
+        }
+        return TextureSet(albedo: makeImage(albedo, width: width, height: height),
+                          surface: makeImage(surface, width: width, height: height, linear: true),
+                          emission: makeImage(emission, width: width, height: height),
+                          normal: makeImage(normal, width: width, height: height))
+    }
+
+    // MARK: - Shape helpers
+
+    /// 1 inside `|d| < half`, antialiased over `aa`.
+    @inline(__always) private static func band(_ d: Float, _ half: Float, _ aa: Float) -> Float {
+        1 - smoothstep(half - aa, half + aa, abs(d))
+    }
+
+    /// 1 inside the box centred on the origin.
+    @inline(__always) private static func box(_ x: Float, _ y: Float, _ hx: Float, _ hy: Float, _ aa: Float) -> Float {
+        band(x, hx, aa) * band(y, hy, aa)
+    }
+
+    @inline(__always) private static func fract(_ x: Float) -> Float { x - x.rounded(.down) }
+
+    /// A V-shaped stripe whose apex points towards +y. `x` is centred, `y` is measured from the apex.
+    @inline(__always) private static func chevron(_ x: Float, _ y: Float, halfWidth: Float, slope: Float,
+                                                 thickness: Float, aa: Float) -> Float {
+        band(y + abs(x) * slope, thickness, aa) * band(x, halfWidth, aa)
+    }
+
+    /// Worn, brushed plate. Tiles on [0, 1); `cells` scales the detail.
+    private struct MetalBase {
+        let noise: Noise2D
+        init(seed: UInt64) { noise = Noise2D(seed: seed) }
+
+        /// `tone` multiplies albedo; `wear` in 0...1 marks dull, scuffed areas.
+        func sample(_ u: Float, _ v: Float, cells: Int = 4) -> (tone: Float, wear: Float, grain: Float) {
+            let c = Float(cells)
+            let brushed = noise.noise(u * c * 48, v * c * 2, period: cells * 2)
+            let blotch = noise.fbm(u * c, v * c, octaves: 3, period: cells)
+            let streak = noise.noise(u * c * 24, v * c, period: cells)
+            let grain = noise.noise(u * c * 40, v * c * 40, period: cells * 40)
+            let wear = smoothstep(0.35, 0.8, blotch * 0.5 + 0.5 + streak * 0.25)
+            return (1 + brushed * 0.06 + blotch * 0.07 + streak * 0.03, wear, grain)
         }
     }
 
-    // MARK: - Terrain
-
-    static func grass(_ p: TrackDefinition.Palette, seed: UInt64) -> UIImage {
-        let n = Noise2D(seed: seed)
-        return image(width: 512, height: 512) { u, v in
-            let patch = n.fbm(u * 4, v * 4, octaves: 4, period: 4) * 0.5 + 0.5
-            let blades = n.fbm(u * 96, v * 96, octaves: 2, period: 96)
-            let speck = n.noise(u * 220, v * 220, period: 220)
-            var c = simd_mix(p.grassA, p.grassB, SIMD3(repeating: smoothstep(0.3, 0.75, patch)))
-            c *= 0.86 + blades * 0.22 + speck * 0.08
-            return c
-        }
+    /// Rectangular plating with seams. `du`/`dv` are the texture's size in metres so seams stay square.
+    private static func plates(_ u: Float, _ v: Float, cols: Int, rows: Int, size: SIMD2<Float>,
+                               seam: Float, stagger: Bool, noise: Noise2D)
+        -> (seam: Float, tint: Float, bolt: Float) {
+        let fv = v * Float(rows)
+        let row = Int(fv.rounded(.down))
+        let fu = u * Float(cols) + (stagger && row & 1 == 1 ? 0.5 : 0)
+        let col = Int(fu.rounded(.down))
+        let lu = fu - Float(col), lv = fv - Float(row)
+        let cell = SIMD2(size.x / Float(cols), size.y / Float(rows))
+        let ex = min(lu, 1 - lu) * cell.x, ey = min(lv, 1 - lv) * cell.y
+        let groove = 1 - smoothstep(seam * 0.4, seam, min(ex, ey))
+        let tint = Float(noise.hash(((col % cols) + cols) % cols * 7 + 3, row * 13 + 5) & 255) / 255
+        let bx = ex - 0.22, by = ey - 0.22
+        let bolt = 1 - smoothstep(0.045, 0.07, sqrt(bx * bx + by * by))
+        return (groove, tint, bolt)
     }
 
-    static func rock(_ p: TrackDefinition.Palette, seed: UInt64) -> UIImage {
-        let n = Noise2D(seed: seed)
-        return image(width: 512, height: 512) { u, v in
-            let r = n.ridged(u * 6, v * 6, octaves: 5, period: 6)
-            let f = n.fbm(u * 3, v * 3, octaves: 4, period: 3)
-            let strata = sin((v * 18 + f * 2.5) * .pi * 2) * 0.5 + 0.5
-            var c = simd_mix(p.rockA, p.rockB, SIMD3(repeating: smoothstep(0.2, 0.9, r)))
-            c *= 0.78 + strata * 0.14 + n.noise(u * 128, v * 128, period: 128) * 0.1
-            let crack = smoothstep(0.08, 0.0, abs(n.fbm(u * 8, v * 8, octaves: 3, period: 8)))
-            return c * (1 - crack * 0.45)
-        }
-    }
+    // MARK: - Track deck
 
-    static func sand(_ p: TrackDefinition.Palette, seed: UInt64) -> UIImage {
-        let n = Noise2D(seed: seed)
-        return image(width: 512, height: 512) { u, v in
-            let ripple = sin((v * 24 + n.fbm(u * 4, v * 4, octaves: 3, period: 4) * 3) * .pi * 2)
-            let grain = n.noise(u * 256, v * 256, period: 256)
-            let patch = n.fbm(u * 3, v * 3, octaves: 3, period: 3)
-            return p.sand * (0.92 + ripple * 0.035 + grain * 0.07 + patch * 0.12)
-        }
-    }
+    /// One 16 m section of deck: u across the road, v in the direction of travel.
+    static func deck(_ pattern: DeckPattern, theme: TrackTheme, seed: UInt64) -> TextureSet {
+        let base = MetalBase(seed: seed)
+        let n = base.noise
+        let aa: Float = 0.003
+        let dark = SIMD3<Float>(0.035, 0.037, 0.04)
+        return bake(width: 1024, height: 1024) { u, v in
+            let m = base.sample(u, v)
+            let p = plates(u, v, cols: 4, rows: 4, size: SIMD2(16, 16), seam: 0.05, stagger: true, noise: n)
+            var t = Texel()
+            t.albedo = theme.metal * (0.50 + p.tint * 0.14) * m.tone
+            t.rough = 0.30 + m.wear * 0.22 + m.grain * 0.04
+            t.height = -p.seam + p.bolt * 0.5
+            t.albedo *= 1 - p.seam * 0.75
+            t.rough += p.seam * 0.3
 
-    /// Square paving slabs / cobbles for town pavements.
-    static func pavement(seed: UInt64) -> UIImage {
-        let n = Noise2D(seed: seed)
-        return image(width: 512, height: 512) { u, v in
-            let cell = n.cellular(u * 12, v * 12, cells: 12)
-            let edge = smoothstep(0.02, 0.10, cell.f2 - cell.f1)
-            let tone = Float(cell.id & 31) / 31
-            let grain = n.noise(u * 200, v * 200, period: 200) * 0.06
-            let stone = SIMD3<Float>(0.56, 0.54, 0.50) * (0.82 + tone * 0.3 + grain)
-            return simd_mix(SIMD3(0.24, 0.23, 0.22), stone, SIMD3(repeating: edge))
-        }
-    }
+            // Two tread lanes of raised diamond plate.
+            let lane = max(band(u - 0.27, 0.085, aa), band(u - 0.73, 0.085, aa))
+            let diamond = max(0, sin((u + v) * 96 * .pi) * sin((u - v) * 96 * .pi))
+            t.height += lane * diamond * 0.35
+            t.albedo *= 1 - lane * 0.22
+            t.rough += lane * 0.18
 
-    // MARK: - Road
+            // Chipped paint: worn through where the plate is scuffed.
+            let chips = n.fbm(u * 48, v * 48, octaves: 2, period: 48)
+            let wearMask = 1 - 0.75 * smoothstep(0.5, 0.75, chips * 0.5 + 0.5 - 0.2 + m.wear * 0.4)
+            let x = u * 2 - 1
 
-    static func gravel(seed: UInt64, tint: SIMD3<Float> = SIMD3(0.58, 0.54, 0.48)) -> UIImage {
-        let n = Noise2D(seed: seed)
-        return image(width: 512, height: 512) { u, v in
-            let c1 = n.cellular(u * 48, v * 48, cells: 48)
-            let pebble = smoothstep(0.0, 0.25, c1.f2 - c1.f1)
-            let tone = Float(c1.id & 15) / 15
-            let base = tint * (0.7 + tone * 0.45)
-            return simd_mix(tint * 0.45, base, SIMD3(repeating: pebble))
-                * (0.95 + n.fbm(u * 4, v * 4, octaves: 3, period: 4) * 0.15)
-        }
-    }
+            // Continuous edge lines tie neighbouring sections together.
+            let edge = max(band(u - 0.035, 0.008, aa), band(u - 0.965, 0.008, aa))
+            t.paint(theme.paint, edge * wearMask)
 
-    /// Dirt road across u (0 = left edge, 1 = right edge) with tyre ruts; v runs along the track.
-    static func dirtRoad(seed: UInt64) -> UIImage {
-        let n = Noise2D(seed: seed)
-        let base = SIMD3<Float>(0.52, 0.38, 0.24)
-        return image(width: 512, height: 1024) { u, v in
-            let wobble = n.fbm(v * 6, 0.5, octaves: 3, period: 6) * 0.03
-            let x = u + wobble
-            let rut = max(exp(-pow((x - 0.30) / 0.05, 2)), exp(-pow((x - 0.70) / 0.05, 2)))
-            let edge = smoothstep(0.06, 0.0, min(x, 1 - x))
-            let stones = n.cellular(u * 40, v * 80, cells: 40)
-            let pebble = smoothstep(0.12, 0.0, stones.f1) * 0.25
-            let f = n.fbm(u * 8, v * 16, octaves: 4, period: 8)
-            var c = base * (0.92 + f * 0.22 - rut * 0.20 + pebble)
-            c = simd_mix(c, SIMD3(0.40, 0.36, 0.22), SIMD3(repeating: edge * 0.6))
-            return c
-        }
-    }
+            switch pattern {
+            case .plain:
+                let dash = band(fract(v * 4) - 0.5, 0.3, aa * 4) * band(x, 0.012, aa * 2)
+                t.glow(theme.neonA, dash)
 
-    /// Red/white kerb stripes: 8 blocks per texture repeat along v.
-    static func kerb() -> UIImage {
-        let n = Noise2D(seed: 5)
-        return image(width: 64, height: 512) { u, v in
-            let stripe = Int(v * 8) % 2 == 0
-            let base: SIMD3<Float> = stripe ? SIMD3(0.82, 0.12, 0.10) : SIMD3(0.92, 0.92, 0.90)
-            let dirt = n.fbm(u * 4, v * 32, octaves: 3, period: 4) * 0.08
-            let gap = smoothstep(0.004, 0.0, abs(v * 8 - (v * 8).rounded()))
-            return base * (0.95 + dirt) * (1 - gap * 0.4)
-        }
-    }
+            case .chevrons:
+                var c: Float = 0
+                for k in 0..<3 {
+                    c = max(c, chevron(x, v - (0.42 + Float(k) * 0.24), halfWidth: 0.5, slope: 0.42,
+                                       thickness: 0.045, aa: aa))
+                }
+                t.paint(theme.paint, c * wearMask)
 
-    // MARK: - Structures
+            case .turn:
+                // Arrowheads pointing towards +u; mirrored in the mesh for left-handers.
+                let back = box(x, v - 0.5, 0.86, 0.36, aa)
+                t.paint(dark, back * 0.9)
+                var c: Float = 0
+                for k in 0..<4 {
+                    c = max(c, chevron((v - 0.5) * 2, x - (-0.36 + Float(k) * 0.4), halfWidth: 0.58,
+                                       slope: 0.42, thickness: 0.085, aa: aa * 2))
+                }
+                t.paint(theme.paint, c * back * wearMask)
+                let rim = max(band(abs(v - 0.5) - 0.37, 0.006, aa), 0) * band(x, 0.86, aa)
+                t.glow(theme.neonB, rim)
 
-    /// Concrete panels for tunnels and portals; one texture tile = 4 × 4 m.
-    static func concrete(seed: UInt64) -> UIImage {
-        let n = Noise2D(seed: seed)
-        return image(width: 512, height: 512) { u, v in
-            let f = n.fbm(u * 6, v * 6, octaves: 5, period: 6)
-            let streak = n.fbm(u * 40, v * 2, octaves: 2, period: 40) * smoothstep(0.3, 1, v)
-            let joint = smoothstep(0.006, 0.0, min(abs(u - 0.5), min(u, 1 - u)))
-                + smoothstep(0.006, 0.0, min(v, 1 - v))
-            let c = SIMD3<Float>(0.66, 0.65, 0.62) * (0.9 + f * 0.18 - streak * 0.12)
-            return c * (1 - min(joint, 1) * 0.35)
-        }
-    }
+            case .hazard:
+                let side = max(band(u - 0.12, 0.06, aa), band(u - 0.88, 0.06, aa))
+                let stripe = band(fract((u * (u < 0.5 ? 1 : -1) + v) * 14) - 0.5, 0.25, aa * 14)
+                t.paint(dark, side)
+                t.paint(theme.paint, side * stripe * wearMask)
+                let bars = band(fract(v * 8) - 0.5, 0.12, aa * 8) * band(x, 0.3, aa * 2)
+                t.paint(theme.paint, bars * wearMask * 0.9)
 
-    /// One facade tile = 2 bays × 1 floor (6 m × 3 m). Upper floors with window variations.
-    static func facade(wall: SIMD3<Float>, seed: UInt64) -> UIImage {
-        let n = Noise2D(seed: seed)
-        var rng = SplitMix64(seed: seed)
-        let shutters = rng.float() > 0.5
-        let shutterColor = SIMD3<Float>(rng.float(0.15...0.4), rng.float(0.25...0.45), rng.float(0.2...0.35))
-        let lit = (rng.float(), rng.float())
-        let variant = Int(rng.next() % 3)
-        return image(width: 512, height: 256) { u, v in
-            let plaster = n.fbm(u * 8, v * 4, octaves: 4, period: 8)
-            let grime = smoothstep(0.6, 1, v) * n.fbm(u * 3, v * 2, octaves: 2, period: 3) * 0.08
-            var c = wall * (0.9 + plaster * 0.14 - grime)
-            let bay = u < 0.5 ? 0 : 1
-            let lu = (u * 2).truncatingRemainder(dividingBy: 1)
-            let lv = 1 - v
-            let inWindow = lu > 0.3 && lu < 0.7 && lv > 0.28 && lv < 0.8
-            let inFrame = lu > 0.27 && lu < 0.73 && lv > 0.25 && lv < 0.83
-            if inFrame && !inWindow {
-                if variant == 0 {
-                    let keystone = smoothstep(0.08, 0.0, abs(lu - 0.5)) * smoothstep(0.06, 0.02, abs(lv - 0.79))
-                    c = simd_mix(SIMD3(0.92, 0.91, 0.88), SIMD3(0.85, 0.82, 0.78), SIMD3(repeating: keystone))
-                } else if variant == 1 {
-                    let lintel = smoothstep(0.01, 0.0, abs(lv - 0.81))
-                    c = simd_mix(SIMD3(0.92, 0.91, 0.88), SIMD3(0.78, 0.75, 0.70), SIMD3(repeating: lintel))
-                } else {
-                    c = SIMD3(0.92, 0.91, 0.88)
+            case .grate:
+                let frame = box(x, v - 0.5, 0.52, 0.44, aa)
+                let inner = box(x, v - 0.5, 0.47, 0.415, aa)
+                let slot = band(fract(v * 28) - 0.5, 0.2, aa * 28) * band(fract(u * 3) - 0.5, 0.42, aa * 3)
+                t.paint(theme.paint, (frame - inner) * wearMask)
+                let hole = inner * slot
+                t.albedo = simd_mix(t.albedo, dark, SIMD3(repeating: hole))
+                t.height -= hole * 0.9
+                t.rough = mix(t.rough, 0.7, hole)
+                t.emission += theme.neonB * hole * 0.35
+
+            case .boost:
+                let pad = box(x, v - 0.5, 0.42, 0.44, aa)
+                t.paint(dark, pad)
+                var c: Float = 0
+                for k in 0..<4 {
+                    c = max(c, chevron(x, v - (0.3 + Float(k) * 0.2), halfWidth: 0.34, slope: 0.38,
+                                       thickness: 0.035, aa: aa))
+                }
+                t.glow(theme.neonA, c * pad)
+                let rim = (box(x, v - 0.5, 0.44, 0.455, aa) - pad)
+                t.glow(theme.neonA * 0.6, max(rim, 0))
+
+            case .barcode:
+                // Transverse bars of hashed widths on one side, a block glyph on the other.
+                let slotIndex = Int((v * 32).rounded(.down))
+                let on = n.hash(slotIndex, 91) & 3 != 0
+                let bar = on ? band(fract(v * 32) - 0.5, 0.36, aa * 32) * band(x + 0.52, 0.2, aa * 2) : 0
+                t.paint(theme.paint, bar * wearMask)
+                let gx = Int(((x - 0.3) / 0.075).rounded(.down)), gy = Int((v * 12).rounded(.down))
+                if gx >= 0, gx < 6, n.hash(gx + 40, gy + 7) & 1 == 0 {
+                    let cellMask = band(fract((x - 0.3) / 0.075) - 0.5, 0.4, 0.05) * band(fract(v * 12) - 0.5, 0.4, 0.05)
+                    t.paint(SIMD3(repeating: 0.85), cellMask * wearMask)
+                }
+                let dash = band(fract(v * 4) - 0.5, 0.3, aa * 4) * band(x, 0.012, aa * 2)
+                t.glow(theme.neonA, dash)
+
+            case .start:
+                let stripe = band(v - 0.5, 0.075, aa) * band(x, 0.9, aa)
+                let checker = (Int((u * 24).rounded(.down)) + Int(((v - 0.425) / 0.05).rounded(.down))) & 1 == 0
+                t.paint(checker ? SIMD3(repeating: 0.92) : dark, stripe)
+                let line = band(v - 0.62, 0.008, aa) * band(x, 0.9, aa)
+                t.glow(theme.neonB, line)
+                // Grid brackets behind the line.
+                for k in 0..<2 {
+                    let cx = k == 0 ? Float(-0.42) : 0.42
+                    let cy: Float = k == 0 ? 0.22 : 0.3
+                    let outer = box(x - cx, v - cy, 0.2, 0.07, aa)
+                    let inner = box(x - cx, v - cy + 0.012, 0.18, 0.07, aa)
+                    t.paint(SIMD3(repeating: 0.9), max(outer - inner, 0) * wearMask)
                 }
             }
-            if inWindow {
-                let reflect = smoothstep(0.28, 0.8, lv) * 0.25 + (lu - 0.3) * 0.2
-                let warm = (bay == 0 ? lit.0 : lit.1) > 0.75
-                c = warm ? SIMD3(0.85, 0.72, 0.45) : SIMD3(0.16, 0.22, 0.28) + reflect
-                let mullion = abs(lu - 0.5) < 0.012 || abs(lv - 0.58) < 0.012
-                if mullion { c = SIMD3(0.88, 0.88, 0.86) }
-                let sill = smoothstep(0.02, 0.0, abs(lv - 0.28))
-                c = simd_mix(c, SIMD3(0.82, 0.78, 0.72), SIMD3(repeating: sill * 0.6))
-            }
-            if shutters && lv > 0.25 && lv < 0.83 && ((lu > 0.16 && lu < 0.27) || (lu > 0.73 && lu < 0.84)) {
-                let slat = sin(lv * 160) * 0.5 + 0.5
-                c = shutterColor * (0.85 + slat * 0.2)
-            }
-            if lv < 0.04 { c *= 0.75 }
-            return c
+            return t
         }
     }
 
-    /// Ground floor, one tile = 2 bays × 3.6 m. Bay 0 (0–3 m): shop window or house window;
-    /// bay 1 (3–6 m): door centred at 4.5 m, 1.1 m wide, 2.45 m tall.
-    static func groundFloor(wall: SIMD3<Float>, shop: Bool, seed: UInt64) -> UIImage {
+    // MARK: - Barrier walls
+
+    /// Inner face of the barrier: u from the deck up to the lip (1.36 m), v along 16 m of track.
+    static func wall(_ pattern: WallPattern, theme: TrackTheme, seed: UInt64) -> TextureSet {
+        let base = MetalBase(seed: seed)
+        let n = base.noise
+        let dark = SIMD3<Float>(0.04, 0.042, 0.046)
+        return bake(width: 128, height: 1024) { u, v in
+            let m = base.sample(u * 0.125, v, cells: 4)
+            let p = plates(u, v, cols: 1, rows: 4, size: SIMD2(40, 16), seam: 0.05, stagger: false, noise: n)
+            var t = Texel()
+            t.albedo = theme.hull * (0.9 + p.tint * 0.4) * m.tone * 1.5
+            t.rough = 0.36 + m.wear * 0.2
+            t.height = -p.seam
+            t.albedo *= 1 - p.seam * 0.7
+            // Dark lip and kick plate.
+            let trim = max(1 - smoothstep(0.06, 0.08, u), smoothstep(0.9, 0.92, u))
+            t.albedo = simd_mix(t.albedo, dark, SIMD3(repeating: trim * 0.8))
+            t.height += trim * 0.5
+
+            let y = v * 16, x = u * 1.36          // metres
+            switch pattern {
+            case .strip:
+                t.glow(theme.neonA, band(u - 0.68, 0.045, 0.02))
+                let vent = band(u - 0.3, 0.1, 0.02) * band(fract(y / 0.25) - 0.5, 0.25, 0.08)
+                    * band(fract(v * 4) - 0.5, 0.3, 0.01)
+                t.albedo = simd_mix(t.albedo, dark, SIMD3(repeating: vent))
+                t.height -= vent * 0.6
+            case .chevrons:
+                let back = band(u - 0.5, 0.34, 0.02)
+                t.paint(dark, back)
+                let c = chevron(x - 0.68, fract(y / 1.0) - 0.75, halfWidth: 0.4, slope: 1.1,
+                                thickness: 0.14, aa: 0.03)
+                t.glow(theme.neonB, c * back)
+            case .hazard:
+                let back = band(u - 0.48, 0.3, 0.02)
+                let stripe = band(fract((x + y) / 0.8) - 0.5, 0.25, 0.04)
+                t.paint(dark, back)
+                t.paint(theme.paint, back * stripe * (0.75 + m.wear * 0.25))
+                t.glow(theme.neonA, band(u - 0.86, 0.02, 0.012))
+            }
+            return t
+        }
+    }
+
+    // MARK: - Structure
+
+    /// Ribbed structural plating, 8 m square. Used for the hull, pylons and gates.
+    static func hull(theme: TrackTheme, seed: UInt64) -> TextureSet {
+        let base = MetalBase(seed: seed)
+        let n = base.noise
+        return bake(width: 512, height: 512, bump: 3) { u, v in
+            let m = base.sample(u, v)
+            let p = plates(u, v, cols: 2, rows: 4, size: SIMD2(8, 8), seam: 0.06, stagger: true, noise: n)
+            var t = Texel()
+            t.albedo = theme.hull * (0.75 + p.tint * 0.5) * m.tone
+            t.rough = 0.42 + m.wear * 0.25
+            let rib = band(fract(u * 16) - 0.5, 0.12, 0.05) * Float(p.tint > 0.55 ? 1 : 0)
+            t.height = -p.seam + rib * 0.5 + p.bolt * 0.4
+            t.albedo *= (1 - p.seam * 0.7) * (1 + rib * 0.12)
+            return t
+        }
+    }
+
+    /// Underside keel with recessed light bars: u across, v along 8 m.
+    static func belly(theme: TrackTheme, seed: UInt64) -> TextureSet {
+        let base = MetalBase(seed: seed)
+        let n = base.noise
+        return bake(width: 256, height: 512) { u, v in
+            let m = base.sample(u, v, cells: 2)
+            let p = plates(u, v, cols: 2, rows: 2, size: SIMD2(6, 8), seam: 0.06, stagger: false, noise: n)
+            var t = Texel()
+            t.albedo = theme.hull * (0.7 + p.tint * 0.4) * m.tone
+            t.rough = 0.45 + m.wear * 0.2
+            t.height = -p.seam
+            t.glow(theme.neonA, box(u - 0.5, v - 0.5, 0.2, 0.2, 0.01))
+            return t
+        }
+    }
+
+    // MARK: - City
+
+    /// Tower cladding with lit windows; one copy covers 48 m × 48 m (16 bays × 16 floors).
+    static func facade(variant: Int, theme: TrackTheme, seed: UInt64) -> TextureSet {
+        let base = MetalBase(seed: seed)
+        let n = base.noise
+        let glass = SIMD3<Float>(0.03, 0.04, 0.06)
+        return bake(width: 512, height: 512, bump: 1.5) { u, v in
+            let m = base.sample(u, v)
+            var t = Texel()
+            t.albedo = theme.hull * 0.8 * m.tone
+            t.rough = 0.5
+            let col = Int((u * 16).rounded(.down)), row = Int((v * 16).rounded(.down))
+            let lu = fract(u * 16), lv = fract(v * 16)
+            let h = n.hash(col * 3 + variant * 17, row * 5 + 1)
+            switch variant % 3 {
+            case 0:
+                // Punched windows, randomly lit.
+                let w = box(lu - 0.5, lv - 0.48, 0.36, 0.3, 0.04)
+                let lit: Float = h & 7 < 3 ? 0.35 + Float(h >> 3 & 7) / 10 : 0
+                t.albedo = simd_mix(t.albedo, glass, SIMD3(repeating: w))
+                t.metal = mix(1, 0, w); t.rough = mix(0.5, 0.08, w)
+                t.emission = theme.window * w * lit
+                t.height = -w * 0.6
+            case 1:
+                // Ribbon glazing: whole floors lit in runs.
+                let w = band(lv - 0.45, 0.3, 0.04) * band(lu - 0.5, 0.47, 0.03)
+                let run = n.hash(col / 4 + 9, row * 7 + variant)
+                let lit: Float = run & 3 == 0 ? 0.7 : (run & 3 == 1 ? 0.25 : 0)
+                t.albedo = simd_mix(t.albedo, glass, SIMD3(repeating: w))
+                t.metal = mix(1, 0, w); t.rough = mix(0.5, 0.08, w)
+                t.emission = simd_mix(theme.window, theme.neonA, SIMD3(repeating: 0.35)) * w * lit
+                t.height = -w * 0.6
+            default:
+                // Dark monolith with neon risers and a few service lights.
+                t.albedo *= 0.6
+                let riser = col % 8 == 3 ? band(lu - 0.5, 0.16, 0.05) : 0
+                let color = col % 16 == 3 ? theme.neonA : theme.neonB
+                t.emission = color * riser * (0.6 + 0.4 * Float(h & 1))
+                let dot = h & 31 == 0 ? box(lu - 0.5, lv - 0.5, 0.12, 0.12, 0.04) : 0
+                t.emission += theme.window * dot
+                t.height = -band(lv, 0.04, 0.02) * 0.5 - riser * 0.4
+            }
+            return t
+        }
+    }
+
+    /// The city floor far below: a grid of lit streets and blocks, one copy per 800 m.
+    static func cityFloor(theme: TrackTheme, seed: UInt64) -> TextureSet {
         let n = Noise2D(seed: seed)
-        var rng = SplitMix64(seed: seed)
-        let fascia = SIMD3<Float>(rng.float(0.05...0.45), rng.float(0.08...0.3), rng.float(0.1...0.4))
-        let wood = SIMD3<Float>(rng.float(0.25...0.5), rng.float(0.14...0.28), rng.float(0.08...0.16))
-        let stone = SIMD3<Float>(0.70, 0.67, 0.62)
-        let frame = SIMD3<Float>(0.9, 0.89, 0.86)
-        return image(width: 512, height: 308) { u, v in
-            let x = u * 6, y = (1 - v) * 3.6           // metres; y up from floor level
-            let grain = n.noise(u * 64, v * 40, period: 64) * 0.06
-            var c = wall * (0.86 + n.fbm(u * 8, v * 5, octaves: 3, period: 8) * 0.12)
-            if shop {
-                if y < 0.35 { c = stone * (0.9 + grain) }
-                if y > 2.85 && y < 3.4 {
-                    c = fascia * (0.9 + grain)
-                    if y < 2.9 || y > 3.35 { c = frame * 0.8 }
-                    // Lettering suggestion: light blocks centred on the fascia.
-                    if abs(y - 3.12) < 0.09 && abs(x - 3) < 1.6 && Int(x * 4) % 3 != 0 { c = SIMD3(0.95, 0.92, 0.8) }
-                }
-                if x > 0.25 && x < 2.75 && y > 0.35 && y < 2.75 {
-                    let inner = x > 0.33 && x < 2.67 && y > 0.43 && y < 2.67
-                    if inner {
-                        let shelf = (Int((y - 0.43) / 0.45) % 2 == 0) ? 0.9 : 1.1
-                        c = SIMD3(0.20, 0.25, 0.30) * Float(shelf) + smoothstep(0.43, 2.6, y) * 0.18
-                        if abs(x - 1.5) < 0.03 { c = wood * 0.7 }
-                    } else {
-                        c = wood * 0.7
-                    }
-                }
+        return bake(width: 512, height: 512, bump: 0) { u, v in
+            var t = Texel()
+            t.albedo = theme.hull * 0.25
+            t.metal = 0; t.rough = 0.8
+            let lu = fract(u * 16), lv = fract(v * 16)
+            let street = max(band(lu, 0.04, 0.02), band(lu - 1, 0.04, 0.02), band(lv, 0.04, 0.02), band(lv - 1, 0.04, 0.02))
+            let dashes = band(fract(u * 128) - 0.5, 0.25, 0.1) * band(fract(v * 128) - 0.5, 0.25, 0.1)
+            t.emission = theme.window * street * dashes * 0.9
+            let h = n.hash(Int((u * 64).rounded(.down)), Int((v * 64).rounded(.down)))
+            let block = (1 - street) * box(fract(u * 64) - 0.5, fract(v * 64) - 0.5, 0.3, 0.3, 0.1)
+            if h & 7 == 0 { t.emission += (h & 8 == 0 ? theme.neonA : theme.neonB) * block * 0.5 }
+            if h & 7 == 1 { t.emission += theme.window * block * 0.3 }
+            return t
+        }
+    }
+
+    /// Equirectangular sky: gradient, horizon glow, haze streaks and stars. Also lights the metal.
+    static func sky(theme: TrackTheme, seed: UInt64) -> UIImage {
+        let n = Noise2D(seed: seed)
+        return image(width: 2048, height: 1024) { u, v in
+            let elevation = (0.5 - v) * .pi
+            let h = sin(elevation)
+            var c: SIMD3<Float>
+            if h >= 0 {
+                c = simd_mix(theme.skyHorizon, theme.skyZenith, SIMD3(repeating: pow(h, 0.45)))
+                let streak = n.fbm(u * 8, v * 40, octaves: 3, period: 8) * 0.5 + 0.5
+                let cloud = smoothstep(0.5, 0.8, streak) * exp(-pow(elevation / 0.5, 2))
+                c += theme.skyGlow * cloud * 0.25
+                let cell = n.cellular(u * 240, v * 120, cells: 240)
+                let star = (1 - smoothstep(0.03, 0.09, cell.f1)) * Float(cell.id & 7 == 0 ? 1 : 0)
+                c += SIMD3(repeating: star * theme.stars * smoothstep(0.1, 0.5, h) * 0.9)
             } else {
-                // Rusticated stone ground floor.
-                c = stone * (0.88 + grain + n.fbm(u * 6, v * 4, octaves: 3, period: 6) * 0.1)
-                let course = y.truncatingRemainder(dividingBy: 0.45)
-                if course < 0.04 { c *= 0.7 }
-                if x > 0.9 && x < 2.1 && y > 0.9 && y < 2.4 {
-                    let inner = x > 0.98 && x < 2.02 && y > 0.98 && y < 2.32
-                    c = inner ? SIMD3(0.18, 0.23, 0.28) + smoothstep(0.98, 2.3, y) * 0.2 : frame
-                    if inner && (abs(x - 1.5) < 0.025 || abs(y - 1.9) < 0.025) { c = frame }
-                }
+                c = simd_mix(theme.skyHorizon, theme.skyHorizon * 0.3, SIMD3(repeating: smoothstep(0, 0.6, -h)))
             }
-            // Door with surround, panels and fanlight.
-            let dx = abs(x - 4.5)
-            if dx < 0.7 && y < 2.65 {
-                c = shop ? wood * 0.7 : stone * 1.08
-                if dx < 0.55 && y < 2.45 {
-                    c = wood * (0.85 + n.fbm(u * 6, v * 30, octaves: 2, period: 6) * 0.2)
-                    if y > 2.05 { c = SIMD3(0.22, 0.27, 0.32) + (y - 2.05) * 0.3 }
-                    let panel = dx > 0.08 && dx < 0.45 && ((y > 0.25 && y < 0.95) || (y > 1.15 && y < 1.9))
-                    if !panel && y <= 2.05 { c *= 0.82 }
-                    if abs(dx - 0.42) < 0.03 && abs(y - 1.05) < 0.04 { c = SIMD3(0.8, 0.7, 0.35) }
-                }
-            }
-            return c
-        }
-    }
-
-    /// Striped canvas for shop awnings; stripes run down the slope (u).
-    static func awning(seed: UInt64) -> UIImage {
-        var rng = SplitMix64(seed: seed)
-        let a = SIMD3<Float>(rng.float(0.5...0.85), rng.float(0.05...0.3), rng.float(0.05...0.35))
-        return image(width: 128, height: 32) { u, _ in
-            Int(u * 8) % 2 == 0 ? a : SIMD3(0.93, 0.92, 0.88)
-        }
-    }
-
-    /// Stone trim/cornice color for architectural details. Tileable.
-    static func stoneTrim(seed: UInt64) -> UIImage {
-        let n = Noise2D(seed: seed)
-        return image(width: 256, height: 128) { u, v in
-            let stone = SIMD3<Float>(0.80, 0.77, 0.71)
-            let f = n.fbm(u * 6, v * 6, octaves: 3, period: 6)
-            let pore = n.noise(u * 48, v * 48, period: 48) * 0.08
-            return stone * (0.85 + f * 0.22 + pore)
-        }
-    }
-
-    /// Slate roof tiles variant; one tile = 4 × 4 m.
-    static func slateRoof(seed: UInt64) -> UIImage {
-        let n = Noise2D(seed: seed)
-        return image(width: 256, height: 256) { u, v in
-            let rows: Float = 16
-            let row = Int(v * rows)
-            let offset: Float = row % 2 == 0 ? 0 : 0.5
-            let cols: Float = 12
-            let cu = (u * cols + offset).truncatingRemainder(dividingBy: 1)
-            let cv = (v * rows).truncatingRemainder(dividingBy: 1)
-            let tileVar = Float(n.hash(Int(u * cols + offset) & 255, row) & 7) / 7
-            let edge = smoothstep(0.95, 1, cu) * 0.35 + smoothstep(0.94, 1, cv) * 0.25
-            let color = SIMD3<Float>(0.32, 0.35, 0.38)
-            return color * (0.65 + tileVar * 0.3 - edge * 0.2) * (0.95 + n.noise(u * 72, v * 72, period: 72) * 0.08)
-        }
-    }
-
-    /// Clay or slate roof tiles; one tile = 4 × 4 m.
-    static func roof(color: SIMD3<Float>, seed: UInt64) -> UIImage {
-        let n = Noise2D(seed: seed)
-        return image(width: 256, height: 256) { u, v in
-            let rows: Float = 14
-            let row = Int(v * rows)
-            let offset: Float = row % 2 == 0 ? 0 : 0.5
-            let cols: Float = 10
-            let cu = (u * cols + offset).truncatingRemainder(dividingBy: 1)
-            let cv = (v * rows).truncatingRemainder(dividingBy: 1)
-            let tileTone = Float(n.hash(Int(u * cols + offset) & 255, row) & 15) / 15
-            let shade = 0.7 + cv * 0.35 - smoothstep(0.92, 1, cu) * 0.3
-            return color * (shade + tileTone * 0.16) * (0.95 + n.noise(u * 64, v * 64, period: 64) * 0.08)
-        }
-    }
-
-    static func flatRoof(seed: UInt64) -> UIImage {
-        let n = Noise2D(seed: seed)
-        return image(width: 256, height: 256) { u, v in
-            SIMD3<Float>(0.42, 0.41, 0.40) * (0.85 + n.fbm(u * 8, v * 8, octaves: 4, period: 8) * 0.25)
-        }
-    }
-
-    static func bark(seed: UInt64) -> UIImage {
-        let n = Noise2D(seed: seed)
-        return image(width: 128, height: 256) { u, v in
-            let ridges = n.fbm(u * 12, v * 2, octaves: 3, period: 12)
-            return SIMD3<Float>(0.32, 0.24, 0.18) * (0.8 + ridges * 0.4)
-        }
-    }
-
-    static func foliage(seed: UInt64) -> UIImage {
-        let n = Noise2D(seed: seed)
-        return image(width: 256, height: 256) { u, v in
-            let c = n.cellular(u * 16, v * 16, cells: 16)
-            let leaf = smoothstep(0.5, 0.05, c.f1)
-            return SIMD3(repeating: 0.6 + leaf * 0.5 + n.noise(u * 64, v * 64, period: 64) * 0.1)
-        }
-    }
-
-    static func waterNormal(seed: UInt64) -> UIImage {
-        let n = Noise2D(seed: seed)
-        return normalMap(size: 512, strength: 6) { u, v in
-            let wu = u - u.rounded(.down), wv = v - v.rounded(.down)
-            return n.fbm(wu * 8, wv * 8, octaves: 4, period: 8)
-                + sin((wu + n.fbm(wu * 2, wv * 2, octaves: 2, period: 2) * 0.3) * .pi * 2 * 6) * 0.15
+            let glow = exp(-pow(elevation / 0.13, 2)) * (0.55 + 0.45 * n.fbm(u * 6, 0.5, octaves: 2, period: 6))
+            return c + theme.skyGlow * glow * 0.35
         }
     }
 }

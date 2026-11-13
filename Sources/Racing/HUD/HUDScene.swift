@@ -2,7 +2,7 @@ import SpriteKit
 import simd
 
 /// SpriteKit HUD scene overlaid on the SCNView.
-/// Displays speed, lap time, surface type, drift warning, and minimap.
+/// Displays speed, lap time, track name, drift warning, and minimap.
 final class HUDScene: SKScene {
 
     // Nodes
@@ -10,7 +10,7 @@ final class HUDScene: SKScene {
     private var speedUnit: SKLabelNode!
     private var lapLabel: SKLabelNode!
     private var lapTimeLabel: SKLabelNode!
-    private var surfaceLabel: SKLabelNode!
+    private var trackLabel: SKLabelNode!
     private var driftLabel: SKLabelNode!
     private var minimapBG: SKShapeNode!
     private var minimapTrackPath: SKShapeNode!
@@ -68,12 +68,12 @@ final class HUDScene: SKScene {
         lapTimeLabel.horizontalAlignmentMode = .center
         addChild(lapTimeLabel)
 
-        // ── Surface / drift (top left) ────────────────────────────────────────
-        surfaceLabel = label("TARMAC", size: 16, weight: .medium)
-        surfaceLabel.position = CGPoint(x: 20, y: s.height - 36)
-        surfaceLabel.horizontalAlignmentMode = .left
-        surfaceLabel.fontColor = SKColor(white: 0.9, alpha: 0.85)
-        addChild(surfaceLabel)
+        // ── Track name / drift (top left) ────────────────────────────────────────
+        trackLabel = label("", size: 16, weight: .medium)
+        trackLabel.position = CGPoint(x: 20, y: s.height - 36)
+        trackLabel.horizontalAlignmentMode = .left
+        trackLabel.fontColor = SKColor(white: 0.9, alpha: 0.85)
+        addChild(trackLabel)
 
         driftLabel = label("DRIFT!", size: 22, weight: .heavy)
         driftLabel.position = CGPoint(x: s.width * 0.5, y: s.height - 60)
@@ -104,6 +104,7 @@ final class HUDScene: SKScene {
     // MARK: - Track path drawing (call once after track is available)
 
     func buildMinimapPath(trackPath: TrackPath) {
+        trackLabel.text = trackPath.definition.name.uppercased()
         let samples = trackPath.samples
         let bMin    = trackPath.boundsMin
         let bMax    = trackPath.boundsMax
@@ -136,7 +137,7 @@ final class HUDScene: SKScene {
     // MARK: - Per-frame update
 
     func updateHUD(speed: Float, lap: Int, lapTime: TimeInterval,
-                   surface: SurfaceType, isDrifting: Bool, carPos: SIMD3<Float>,
+                   isDrifting: Bool, carPos: SIMD3<Float>,
                    trackPath: TrackPath) {
         // Speed
         speedLabel.text = "\(Int(speed))"
@@ -144,10 +145,6 @@ final class HUDScene: SKScene {
         // Lap
         lapLabel.text = "LAP \(max(lap, 1))"
         lapTimeLabel.text = formatTime(lapTime)
-
-        // Surface
-        surfaceLabel.text = surface.name
-        surfaceLabel.fontColor = SKColor(cgColor: surface.color.cgColor)
 
         // Drift flash
         if isDrifting {

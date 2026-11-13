@@ -48,7 +48,6 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
     private(set) var displaySpeed: Float    = 0
     private(set) var displayLap: Int        = 0
     private(set) var displayLapTime: TimeInterval = 0
-    private(set) var displaySurface: SurfaceType = .tarmac
     private(set) var displayDrifting        = false
     private(set) var carWorldPos: SIMD3<Float> = .zero
 
@@ -64,39 +63,21 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
     // MARK: - Scene setup
 
     private func buildScene() {
-        scene.background.contents = UIColor(red: 0.58, green: 0.66, blue: 0.68, alpha: 1)
-        if let skyURL = Bundle.main.url(forResource: "overcast_soil_puresky_2k",
-                                        withExtension: "png", subdirectory: "Environment") {
-            scene.background.contents = skyURL
-            scene.background.intensity = 1
-            scene.lightingEnvironment.contents = skyURL
-            scene.lightingEnvironment.intensity = 0.65
-        } else {
-            assertionFailure("Missing bundled overcast LDR environment")
-        }
-        let env = track.definition.environment
-        scene.fogStartDistance = env.fogStart
-        scene.fogEndDistance = env.fogEnd
-        scene.fogDensityExponent = 1.25
-        scene.fogColor = env.fogColor
+        let theme = track.definition.theme
+        let sky = ProceduralTextures.sky(theme: theme, seed: track.definition.seed)
+        scene.background.contents = sky
+        scene.lightingEnvironment.contents = sky
+        scene.lightingEnvironment.intensity = theme.environment
+        scene.fogStartDistance = theme.fogStart
+        scene.fogEndDistance = theme.fogEnd
+        scene.fogDensityExponent = 1.4
+        scene.fogColor = Self.color(theme.skyHorizon)
 
-        addLighting()
+        addLighting(theme)
 
-        // Track mesh
-        let trackNode = TrackMeshBuilder.buildTrackNode(path: track)
-        scene.rootNode.addChildNode(trackNode)
-
-        // Procedural terrain, water and scenery
-        let field = TerrainField(path: track)
-        let terrain = TerrainBuilder.build(field: field)
-        scene.rootNode.addChildNode(terrain.node)
-        if let level = env.waterLevel {
-            scene.rootNode.addChildNode(TerrainBuilder.water(field: field, level: level))
-        }
-        scene.rootNode.addChildNode(TrackScenery.build(field: field, terrainMaterial: terrain.material))
-
-        // Decorations
-        TrackDecorations.addDecorations(to: scene.rootNode, path: track, field: field)
+        // Everything below is generated from the track's master curve.
+        scene.rootNode.addChildNode(TrackMeshBuilder.buildTrackNode(path: track))
+        scene.rootNode.addChildNode(CityScenery.build(path: track))
 
         // Car
         carNode = CarNode(style: carStyle)
@@ -111,12 +92,15 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
         if audioEnabled { setupAudio() }
     }
 
-    private func addLighting() {
-        // Sun
+    private static func color(_ c: SIMD3<Float>) -> UIColor {
+        UIColor(red: CGFloat(c.x), green: CGFloat(c.y), blue: CGFloat(c.z), alpha: 1)
+    }
+
+    private func addLighting(_ theme: TrackTheme) {
         let sunLight         = SCNLight()
         sunLight.type        = .directional
-        sunLight.color       = UIColor(red: 0.86, green: 0.91, blue: 0.94, alpha: 1)
-        sunLight.intensity   = 800
+        sunLight.color       = Self.color(theme.sunColor)
+        sunLight.intensity   = theme.sunIntensity
         sunLight.castsShadow = true
         sunLight.shadowMode  = .forward
         sunLight.shadowSampleCount = 1
@@ -126,18 +110,16 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
         sunLight.shadowCascadeSplittingFactor = 0.8
         sunLight.automaticallyAdjustsShadowProjection = true
         sunLight.maximumShadowDistance = 200
-        sunLight.shadowColor = UIColor(white: 0, alpha: 0.45)
+        sunLight.shadowColor = UIColor(white: 0, alpha: 0.5)
         let sunNode          = SCNNode()
         sunNode.light        = sunLight
-        let sun              = track.definition.environment.sunAngles
-        sunNode.eulerAngles  = SCNVector3(sun.x, sun.y, 0)
+        sunNode.eulerAngles  = SCNVector3(theme.sunAngles.x, theme.sunAngles.y, 0)
         scene.rootNode.addChildNode(sunNode)
 
-        // Sky fill
         let ambLight         = SCNLight()
         ambLight.type        = .ambient
-        ambLight.color       = UIColor(red: 0.67, green: 0.76, blue: 0.78, alpha: 1)
-        ambLight.intensity   = 400
+        ambLight.color       = Self.color(simd_mix(theme.skyHorizon, SIMD3(repeating: 1), SIMD3(repeating: 0.4)))
+        ambLight.intensity   = theme.ambient
         let ambNode          = SCNNode()
         ambNode.light        = ambLight
         scene.rootNode.addChildNode(ambNode)
@@ -177,12 +159,15 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
     private func setupCamera() {
         camera               = SCNCamera()
         camera.fieldOfView   = 65
-        camera.zFar          = 900
+        camera.zFar          = 2400
         camera.zNear         = 0.5
-        camera.wantsHDR = false
+        // HDR is only on for the bloom around the generated emissive markings.
+        camera.wantsHDR = true
         camera.wantsExposureAdaptation = false
         camera.motionBlurIntensity = 0
-        camera.bloomIntensity = 0
+        camera.bloomIntensity = 0.9
+        camera.bloomThreshold = 0.9
+        camera.bloomBlurRadius = 10
 
         cameraNode           = SCNNode()
         cameraNode.camera    = camera
@@ -217,13 +202,10 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
         physics.brake    = brakeInput
         physics.steer    = steerInput
 
-        // Surface lookup
+        // Off the deck and falling into the city: put the car back on the road.
         let sampleIdx    = track.closestSampleIndex(to: physics.position)
         let nearSample   = track.sample(at: sampleIdx)
-        let offset = physics.position - nearSample.position
-        let lateral = abs(simd_dot(SIMD3(offset.x, 0, offset.z),
-                                   simd_normalize(SIMD3(nearSample.right.x, 0, nearSample.right.z))))
-        physics.surface  = lateral > nearSample.halfWidth + 2 ? .gravel : nearSample.surface
+        if physics.position.y < nearSample.position.y - 25 { physics.reset(to: nearSample) }
 
         // Lap detection
         checkLap(sampleIdx: sampleIdx, time: time)
@@ -241,7 +223,6 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
         displaySpeed    = physics.speedKMH
         displayLap      = lapCount
         displayLapTime  = time - lapStartTime
-        displaySurface  = physics.surface
         displayDrifting = physics.isDrifting
         carWorldPos     = physics.position
     }
@@ -285,7 +266,6 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
         displaySpeed    = speed * 3.6
         displayLap      = 1
         displayLapTime  = time - lapStartTime
-        displaySurface  = s0.surface
         displayDrifting = false
         carWorldPos     = pos
     }
@@ -303,14 +283,14 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
         cameraYaw = yaw
         let fwd = SIMD3<Float>(sin(yaw), 0, -cos(yaw))
 
-        // NFS3-style chase cam: low and tight behind the car, low enough for tunnels.
+        // NFS3-style chase cam: low and tight behind the car, low enough to clear the gates.
         let behind: Float = 10.2
         let above:  Float = 2.1
         var targetPos = physics.position - fwd * behind + SIMD3<Float>(0, above, 0)
         let ground = scene.physicsWorld.rayTestWithSegment(
             from: SCNVector3(targetPos.x, targetPos.y + 2, targetPos.z),
             to: SCNVector3(targetPos.x, targetPos.y - 100, targetPos.z),
-            options: [.collisionBitMask: PhysicsCategory.track | PhysicsCategory.terrain,
+            options: [.collisionBitMask: PhysicsCategory.track,
                       .searchMode: SCNPhysicsWorld.TestSearchMode.closest, .backfaceCulling: false])
         if let hit = ground.first { targetPos.y = max(targetPos.y, Float(hit.worldCoordinates.y) + above) }
         let y = (cameraHeight ?? targetPos.y) + (targetPos.y - (cameraHeight ?? targetPos.y)) * min(1, 8 * dt)

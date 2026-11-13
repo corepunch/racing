@@ -27,9 +27,13 @@ final class GameViewController: UIViewController {
         loading.text = "Preparing track…"
         view.addSubview(loading)
 
-        // Launch arguments: `-track <0...3>` picks a circuit, `-autoDrive YES` runs the demo.
+        // Launch arguments: `-track <0...3>` picks a circuit, `-seed <n>` generates a new one,
+        // `-autoDrive YES` runs the demo.
         let trackIndex = UserDefaults.standard.integer(forKey: "track")
-        let definition = TrackLibrary.all[min(max(trackIndex, 0), TrackLibrary.all.count - 1)]
+        let seed = UserDefaults.standard.integer(forKey: "seed")
+        let definition = seed > 0
+            ? TrackLibrary.generated(seed: UInt64(seed))
+            : TrackLibrary.all[min(max(trackIndex, 0), TrackLibrary.all.count - 1)]
         let autoDrive = UserDefaults.standard.bool(forKey: "autoDrive")
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let scene = GameScene(definition: definition)
@@ -82,7 +86,6 @@ final class GameViewController: UIViewController {
             speed:    gs.displaySpeed,
             lap:      gs.displayLap,
             lapTime:  gs.displayLapTime,
-            surface:  gs.displaySurface,
             isDrifting: gs.displayDrifting,
             carPos:   gs.carWorldPos,
             trackPath: gs.track

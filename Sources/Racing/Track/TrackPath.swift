@@ -1,64 +1,14 @@
 import SceneKit
 import simd
 
-// Surface type controls Sega Rally style grip and drift thresholds
-enum SurfaceType: Int, CaseIterable {
-    case tarmac
-    case dirt
-    case gravel
-
-    // N/rad — higher = sharper cornering response
-    var corneringStiffness: Float {
-        switch self {
-        case .tarmac:  return 15_000
-        case .dirt:    return  8_000
-        case .gravel:  return  6_200
-        }
-    }
-
-    // Slip angle (rad) beyond which rear wheels lose grip and drift begins
-    var driftThreshold: Float {
-        switch self {
-        case .tarmac:  return 0.45
-        case .dirt:    return 0.26
-        case .gravel:  return 0.20
-        }
-    }
-
-    var name: String {
-        switch self {
-        case .tarmac:  return "TARMAC"
-        case .dirt:    return "DIRT"
-        case .gravel:  return "GRAVEL"
-        }
-    }
-
-    var color: UIColor {
-        switch self {
-        case .tarmac:  return UIColor(white: 0.28, alpha: 1)
-        case .dirt:    return UIColor(red: 0.52, green: 0.36, blue: 0.20, alpha: 1)
-        case .gravel:  return UIColor(white: 0.60, alpha: 1)
-        }
-    }
-}
-
 struct PathSample {
     var position: SIMD3<Float>
     var forward: SIMD3<Float>    // normalised, tangent to curve
-    var right: SIMD3<Float>      // normalised, perpendicular to forward in XZ plane
-    var up: SIMD3<Float>         // normalised, may be banked
+    var right: SIMD3<Float>      // normalised, banked with the deck
+    var up: SIMD3<Float>         // normalised, deck normal
     var arcLength: Float         // cumulative distance from sample[0]
-    var surface: SurfaceType
-    var halfWidth: Float         // road half-width in metres
+    var halfWidth: Float         // deck half-width in metres
     var curvature: Float = 0     // signed 1/m, positive turning right
-    var zone: TrackDefinition.Zone.Kind? = nil
-    /// 0 at a tunnel portal, rising to 1 deep inside; 0 outside tunnels.
-    var tunnelDepth: Float = 0
-    /// 1 inside tunnels, fading to 0 over the approach cuttings.
-    var tunnelInfluence: Float = 0
-    var tunnelHill: Float = 0
-    /// 1 inside towns, fading to 0 over the outskirts.
-    var townInfluence: Float = 0
 }
 
 final class TrackPath {
@@ -72,10 +22,14 @@ final class TrackPath {
     let boundsMin: SIMD2<Float>
     let boundsMax: SIMD2<Float>
 
+    /// Samples per texture section; `stepCount` is always a multiple of it.
+    static let sectionSamples = 8
+    var sectionCount: Int { stepCount / Self.sectionSamples }
+
     /// Resamples the closed Catmull-Rom loop at uniform arc length (`spacing` metres).
     init(definition: TrackDefinition = TrackLibrary.all[0], spacing: Float = 2) {
         self.definition = definition
-        let pts = definition.controlPoints
+        let pts = definition.curve.controlPoints()
         let n = pts.count
 
         // Dense evaluation for arc-length parameterisation.
@@ -94,7 +48,7 @@ final class TrackPath {
             denseLen.append(acc)
         }
         let length = acc
-        let count = max(64, Int((length / spacing).rounded()))
+        let count = max(8, Int((length / spacing / Float(Self.sectionSamples)).rounded())) * Self.sectionSamples
         let step = length / Float(count)
         self.stepCount = count
         self.totalLength = length
@@ -134,56 +88,25 @@ final class TrackPath {
             curvatures = next
         }
 
-        func lapDistance(_ a: Float, _ b: Float) -> Float {
-            let d = abs(a - b).truncatingRemainder(dividingBy: length)
-            return min(d, length - d)
-        }
+        var rng = SplitMix64(seed: definition.seed &+ 77)
+        let widthPhase = SIMD2<Float>(rng.float(0...(2 * .pi)), rng.float(0...(2 * .pi)))
 
         var built = [PathSample]()
         built.reserveCapacity(count)
         for i in 0..<count {
             let progress = Float(i) / Float(count)
-            let arc = Float(i) * step
             let fwd = forwards[i]
             let flatRight = simd_normalize(simd_cross(fwd, SIMD3<Float>(0, 1, 0)))
-            let bank = max(-0.14, min(0.14, curvatures[i] * 14 * definition.banking))
+            let bank = max(-0.3, min(0.3, curvatures[i] * 26 * definition.banking))
             let q = simd_quatf(angle: bank, axis: fwd)
             let right = q.act(flatRight)
             let up = simd_normalize(simd_cross(right, fwd))
-
-            var sample = PathSample(
+            let swell = 0.6 * sin(progress * 4 * .pi + widthPhase.x) + 0.4 * sin(progress * 10 * .pi + widthPhase.y)
+            built.append(PathSample(
                 position: positions[i], forward: fwd, right: right, up: up,
-                arcLength: arc, surface: definition.surface(at: progress),
-                halfWidth: definition.halfWidth, curvature: curvatures[i])
-
-            for zone in definition.zones {
-                let zs = zone.start * length, ze = zone.end * length
-                let inside = progress >= zone.start && progress < zone.end
-                let edge = min(lapDistance(arc, zs), lapDistance(arc, ze))
-                switch zone.kind {
-                case .tunnel:
-                    if inside {
-                        sample.zone = .tunnel
-                        sample.tunnelDepth = smoothstep(0, 45, edge)
-                        sample.tunnelInfluence = 1
-                        sample.tunnelHill = zone.hill
-                    } else if edge < 90 {
-                        let f = 1 - smoothstep(0, 90, edge)
-                        if f > sample.tunnelInfluence {
-                            sample.tunnelInfluence = f
-                            sample.tunnelHill = zone.hill
-                        }
-                    }
-                case .town:
-                    if inside {
-                        sample.zone = .town
-                        sample.townInfluence = 1
-                    } else {
-                        sample.townInfluence = max(sample.townInfluence, 1 - smoothstep(0, 60, edge))
-                    }
-                }
-            }
-            built.append(sample)
+                arcLength: Float(i) * step,
+                halfWidth: definition.halfWidth + definition.widthVariation * swell,
+                curvature: curvatures[i]))
         }
 
         samples = built
