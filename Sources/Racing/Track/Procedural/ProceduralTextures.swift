@@ -61,6 +61,59 @@ struct TextureSet {
     }
 }
 
+/// Antialiased coverage of a line of stencil lettering, sampled by the texture shaders.
+struct TextMask {
+    let width: Int
+    let height: Int
+    private let pixels: [UInt8]
+    /// Width over height of the lettering's bounding box.
+    var aspect: Float { Float(width) / Float(height) }
+
+    init(_ text: String, height: Int = 96, tracking: CGFloat = 0.12) {
+        let size = CGFloat(height) * 1.08
+        let font = UIFont(name: "DINCondensed-Bold", size: size)
+            ?? UIFont.monospacedSystemFont(ofSize: size * 0.8, weight: .heavy)
+        let string = NSAttributedString(string: text, attributes: [
+            .font: font, .foregroundColor: UIColor.white, .kern: size * tracking,
+        ])
+        let bounds = string.size()
+        let w = max(4, Int(bounds.width.rounded(.up)) + 4)
+        var data = [UInt8](repeating: 0, count: w * height)
+        data.withUnsafeMutableBytes { raw in
+            guard let ctx = CGContext(data: raw.baseAddress, width: w, height: height, bitsPerComponent: 8,
+                                      bytesPerRow: w, space: CGColorSpaceCreateDeviceGray(),
+                                      bitmapInfo: CGImageAlphaInfo.none.rawValue) else { return }
+            ctx.translateBy(x: 0, y: CGFloat(height))
+            ctx.scaleBy(x: 1, y: -1)
+            UIGraphicsPushContext(ctx)
+            // Centre the cap height; DIN's line box has extra room above the capitals.
+            let y = (CGFloat(height) - font.capHeight) / 2 - (font.ascender - font.capHeight)
+            string.draw(at: CGPoint(x: 2, y: y))
+            UIGraphicsPopContext()
+        }
+        width = w
+        self.height = height
+        pixels = data
+    }
+
+    /// Coverage at (s, t): s runs in the reading direction, t from baseline side up. 0 outside.
+    func sample(_ s: Float, _ t: Float) -> Float {
+        guard s > 0, s < 1, t > 0, t < 1 else { return 0 }
+        let x = s * Float(width) - 0.5, y = (1 - t) * Float(height) - 0.5
+        let x0 = max(0, Int(x.rounded(.down))), y0 = max(0, Int(y.rounded(.down)))
+        let x1 = min(width - 1, x0 + 1), y1 = min(height - 1, y0 + 1)
+        let fx = min(max(x - Float(x0), 0), 1), fy = min(max(y - Float(y0), 0), 1)
+        func px(_ x: Int, _ y: Int) -> Float { Float(pixels[y * width + x]) / 255 }
+        return mix(mix(px(x0, y0), px(x1, y0), fx), mix(px(x0, y1), px(x1, y1), fx), fy)
+    }
+
+    /// Lettering `size` metres tall centred at `center`, for a point `p` (metres) on a surface
+    /// whose reading direction is +x and whose "up" is +y.
+    func coverage(_ p: SIMD2<Float>, center: SIMD2<Float>, size: Float) -> Float {
+        sample((p.x - center.x) / (size * aspect) + 0.5, (p.y - center.y) / size + 0.5)
+    }
+}
+
 /// CPU-generated, tileable textures. Everything is seeded so a track looks identical every launch.
 enum ProceduralTextures {
 
@@ -134,6 +187,13 @@ enum ProceduralTextures {
                           normal: makeImage(normal, width: width, height: height))
     }
 
+    /// Glowing lettering on black, for additive decals. One texel row per `height` pixel.
+    static func sign(_ text: String, color: SIMD3<Float>, height: Int = 128) -> (image: UIImage, aspect: Float) {
+        let mask = TextMask(text, height: height)
+        let img = image(width: mask.width, height: mask.height) { u, v in color * mask.sample(u, 1 - v) }
+        return (img, mask.aspect)
+    }
+
     // MARK: - Shape helpers
 
     /// 1 inside `|d| < half`, antialiased over `aa`.
@@ -197,7 +257,21 @@ enum ProceduralTextures {
         let n = base.noise
         let aa: Float = 0.003
         let dark = SIMD3<Float>(0.035, 0.037, 0.04)
+        let white = SIMD3<Float>(repeating: 0.88)
+        // Stencilled lettering; the driver reads it with +u to the right and +v ahead.
+        let code = String(format: "%02d", Int(seed % 89) + 7)
+        let label: TextMask?
+        switch pattern {
+        case .plain: label = TextMask("TRK-\(code) // MAGLOCK")
+        case .hazard: label = TextMask("CAUTION")
+        case .grate: label = TextMask("VENT \(code)")
+        case .boost: label = TextMask("BOOST")
+        case .barcode: label = TextMask("SECTOR \(code)  AG-7")
+        case .start: label = TextMask("GRID")
+        case .chevrons, .turn: label = nil
+        }
         return bake(width: 1024, height: 1024) { u, v in
+            let pm = SIMD2(u * 16, v * 16)     // metres
             let m = base.sample(u, v)
             let p = plates(u, v, cols: 4, rows: 4, size: SIMD2(16, 16), seam: 0.05, stagger: true, noise: n)
             var t = Texel()
@@ -227,6 +301,7 @@ enum ProceduralTextures {
             case .plain:
                 let dash = band(fract(v * 4) - 0.5, 0.3, aa * 4) * band(x, 0.012, aa * 2)
                 t.glow(theme.neonA, dash)
+                t.paint(white, label!.coverage(pm, center: SIMD2(12.2, 2.6), size: 0.42) * wearMask)
 
             case .chevrons:
                 var c: Float = 0
@@ -254,8 +329,11 @@ enum ProceduralTextures {
                 let stripe = band(fract((u * (u < 0.5 ? 1 : -1) + v) * 14) - 0.5, 0.25, aa * 14)
                 t.paint(dark, side)
                 t.paint(theme.paint, side * stripe * wearMask)
-                let bars = band(fract(v * 8) - 0.5, 0.12, aa * 8) * band(x, 0.3, aa * 2)
+                let plate = box(x, v - 0.5, 0.34, 0.07, aa)
+                let bars = band(fract(v * 8) - 0.5, 0.12, aa * 8) * band(x, 0.3, aa * 2) * (1 - plate)
                 t.paint(theme.paint, bars * wearMask * 0.9)
+                t.paint(dark, plate)
+                t.paint(theme.paint, label!.coverage(pm, center: SIMD2(8, 8), size: 1.3) * wearMask)
 
             case .grate:
                 let frame = box(x, v - 0.5, 0.52, 0.44, aa)
@@ -267,6 +345,7 @@ enum ProceduralTextures {
                 t.height -= hole * 0.9
                 t.rough = mix(t.rough, 0.7, hole)
                 t.emission += theme.neonB * hole * 0.35
+                t.paint(white, label!.coverage(pm, center: SIMD2(14.1, 8), size: 0.5) * wearMask)
 
             case .boost:
                 let pad = box(x, v - 0.5, 0.42, 0.44, aa)
@@ -279,6 +358,9 @@ enum ProceduralTextures {
                 t.glow(theme.neonA, c * pad)
                 let rim = (box(x, v - 0.5, 0.44, 0.455, aa) - pad)
                 t.glow(theme.neonA * 0.6, max(rim, 0))
+                let word = max(label!.coverage(pm, center: SIMD2(2.3, 8), size: 0.9),
+                               label!.coverage(pm, center: SIMD2(13.7, 8), size: 0.9))
+                t.paint(white, word * wearMask)
 
             case .barcode:
                 // Transverse bars of hashed widths on one side, a block glyph on the other.
@@ -293,6 +375,7 @@ enum ProceduralTextures {
                 }
                 let dash = band(fract(v * 4) - 0.5, 0.3, aa * 4) * band(x, 0.012, aa * 2)
                 t.glow(theme.neonA, dash)
+                t.paint(white, label!.coverage(pm, center: SIMD2(11.6, 14.6), size: 0.6) * wearMask)
 
             case .start:
                 let stripe = band(v - 0.5, 0.075, aa) * band(x, 0.9, aa)
@@ -300,6 +383,7 @@ enum ProceduralTextures {
                 t.paint(checker ? SIMD3(repeating: 0.92) : dark, stripe)
                 let line = band(v - 0.62, 0.008, aa) * band(x, 0.9, aa)
                 t.glow(theme.neonB, line)
+                t.paint(white, label!.coverage(pm, center: SIMD2(8, 12), size: 1.6) * wearMask)
                 // Grid brackets behind the line.
                 for k in 0..<2 {
                     let cx = k == 0 ? Float(-0.42) : 0.42
@@ -316,7 +400,10 @@ enum ProceduralTextures {
     // MARK: - Barrier walls
 
     /// Inner face of the barrier: u from the deck up to the lip (1.36 m), v along 16 m of track.
-    static func wall(_ pattern: WallPattern, theme: TrackTheme, seed: UInt64) -> TextureSet {
+    /// `label` is lettered along `.label` sections; it reads left to right from the road
+    /// on the right-hand wall, and on the left-hand one once the mesh flips v.
+    static func wall(_ pattern: WallPattern, theme: TrackTheme, seed: UInt64, label: String = "") -> TextureSet {
+        let lettering = pattern == .label ? TextMask(label) : nil
         let base = MetalBase(seed: seed)
         let n = base.noise
         let dark = SIMD3<Float>(0.04, 0.042, 0.046)
@@ -352,6 +439,13 @@ enum ProceduralTextures {
                 let stripe = band(fract((x + y) / 0.8) - 0.5, 0.25, 0.04)
                 t.paint(dark, back)
                 t.paint(theme.paint, back * stripe * (0.75 + m.wear * 0.25))
+                t.glow(theme.neonA, band(u - 0.86, 0.02, 0.012))
+            case .label:
+                let back = band(u - 0.47, 0.3, 0.02)
+                t.paint(dark, back)
+                // Twice per section, reading against +v.
+                let q = SIMD2(4 - (y.truncatingRemainder(dividingBy: 8)), x)
+                t.glow(theme.neonB, lettering!.coverage(q, center: SIMD2(0, 0.64), size: 0.5) * back)
                 t.glow(theme.neonA, band(u - 0.86, 0.02, 0.012))
             }
             return t
@@ -389,6 +483,66 @@ enum ProceduralTextures {
             t.rough = 0.45 + m.wear * 0.2
             t.height = -p.seam
             t.glow(theme.neonA, box(u - 0.5, v - 0.5, 0.2, 0.2, 0.01))
+            return t
+        }
+    }
+
+    // MARK: - Tunnels and halls
+
+    /// Interior cladding: u is 8 m around the cross-section, v is 16 m along the track.
+    /// A rib closes each section, with a light tube and cable trays between ribs.
+    static func tunnelWall(theme: TrackTheme, seed: UInt64) -> TextureSet {
+        let base = MetalBase(seed: seed)
+        let n = base.noise
+        let dark = SIMD3<Float>(0.03, 0.032, 0.036)
+        return bake(width: 512, height: 1024, bump: 3) { u, v in
+            let m = base.sample(u, v)
+            let p = plates(u, v, cols: 4, rows: 4, size: SIMD2(8, 16), seam: 0.05, stagger: true, noise: n)
+            var t = Texel()
+            t.albedo = theme.hull * (0.8 + p.tint * 0.5) * m.tone
+            t.rough = 0.4 + m.wear * 0.25
+            t.height = -p.seam + p.bolt * 0.4
+            t.albedo *= 1 - p.seam * 0.7
+            // Structural rib across the direction of travel, with a thin signal line.
+            let rib = max(band(v, 0.035, 0.004), band(v - 1, 0.035, 0.004))
+            t.albedo = simd_mix(t.albedo, dark, SIMD3(repeating: rib * 0.85))
+            t.height += rib * 1.2
+            t.glow(theme.neonB, max(band(v, 0.006, 0.002), band(v - 1, 0.006, 0.002)))
+            // Continuous light tube in a dark recess.
+            let recess = band(u - 0.5, 0.045, 0.006) * (1 - rib)
+            t.albedo = simd_mix(t.albedo, dark, SIMD3(repeating: recess))
+            t.height -= recess * 0.6
+            t.glow(theme.neonA, band(u - 0.5, 0.016, 0.006) * (1 - rib))
+            // Cable trays.
+            let tray = max(band(u - 0.2, 0.025, 0.004), band(u - 0.8, 0.025, 0.004)) * (1 - rib)
+            let cable = 0.5 + 0.5 * sin(u * 8 * 160 * .pi)
+            t.albedo = simd_mix(t.albedo, dark * (1 + cable), SIMD3(repeating: tray * 0.8))
+            t.height += tray * cable * 0.5
+            // Small forward ticks beside the tube.
+            let tick = chevron((u - 0.36) * 8, fract(v * 8) - 0.7, halfWidth: 0.3, slope: 0.5,
+                               thickness: 0.035, aa: 0.01) * (1 - rib)
+            t.paint(theme.paint, tick * (0.5 + m.wear * 0.3))
+            return t
+        }
+    }
+
+    /// Chamfer between wall and ceiling: a row of framed light panels, four per section.
+    static func tunnelLight(theme: TrackTheme, seed: UInt64) -> TextureSet {
+        let base = MetalBase(seed: seed)
+        let warm = simd_mix(theme.neonA, SIMD3(repeating: 1), SIMD3(repeating: 0.45))
+        return bake(width: 64, height: 512) { u, v in
+            let m = base.sample(u * 0.25, v, cells: 4)
+            var t = Texel()
+            t.albedo = theme.hull * 0.7 * m.tone
+            t.rough = 0.45
+            let lv = fract(v * 4)
+            let panel = band(u - 0.5, 0.3, 0.03) * band(lv - 0.5, 0.36, 0.01)
+            let frame = band(u - 0.5, 0.36, 0.03) * band(lv - 0.5, 0.4, 0.01)
+            t.height = frame * 0.6 - panel * 0.4
+            t.albedo *= 1 - (frame - panel) * 0.6
+            // Diffuser slats.
+            let slat = 0.82 + 0.18 * sin(lv * 40 * .pi)
+            t.glow(warm, panel * slat)
             return t
         }
     }

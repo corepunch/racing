@@ -21,7 +21,7 @@ enum CurveDeformer {
 /// the city, pylons and gates are placed in its (distance, lateral, height) frame.
 struct TrackCurve {
     var radius: Float = 330
-    var pointCount = 24
+    var pointCount = 48
     var altitude: Float = 0
     var deformers: [CurveDeformer]
 
@@ -69,15 +69,17 @@ struct TrackCurve {
     static func random(seed: UInt64) -> TrackCurve {
         var rng = SplitMix64(seed: seed &* 7919 &+ 13)
         var deformers: [CurveDeformer] = []
-        var counts = [2, 3, 4, 5].shuffled(using: &rng)
-        let amounts: [ClosedRange<Float>] = [0.12...0.22, 0.06...0.13, 0.03...0.07]
-        for range in amounts {
-            deformers.append(.lobes(count: counts.removeLast(), amount: rng.float(range),
+        // From the overall shape down to chicane-sized wiggles.
+        let bands: [(counts: ClosedRange<Int>, amount: ClosedRange<Float>)] = [
+            (2...3, 0.14...0.24), (4...5, 0.07...0.13), (6...8, 0.04...0.075), (9...12, 0.022...0.04),
+        ]
+        for band in bands {
+            deformers.append(.lobes(count: Int.random(in: band.counts, using: &rng), amount: rng.float(band.amount),
                                     phase: rng.float(0...(2 * .pi))))
         }
-        for _ in 0..<Int.random(in: 0...2, using: &rng) {
-            deformers.append(.pinch(angle: rng.float(0...(2 * .pi)), amount: rng.float(0.14...0.26),
-                                    width: rng.float(0.18...0.3)))
+        for _ in 0..<Int.random(in: 1...3, using: &rng) {
+            deformers.append(.pinch(angle: rng.float(0...(2 * .pi)), amount: rng.float(0.16...0.28),
+                                    width: rng.float(0.14...0.24)))
         }
         deformers.append(.hills(count: 1, height: rng.float(14...26), phase: rng.float(0...(2 * .pi))))
         deformers.append(.hills(count: 2, height: rng.float(7...14), phase: rng.float(0...(2 * .pi))))
@@ -85,8 +87,8 @@ struct TrackCurve {
                                 phase: rng.float(0...(2 * .pi))))
         deformers.append(.stretch(x: rng.float(0.85...1.3), z: rng.float(0.85...1.3)))
         deformers.append(.shear(rng.float(-0.25...0.25)))
-        deformers.append(.warp(amount: rng.float(8...18), scale: 260, seed: seed &+ 101))
-        return TrackCurve(radius: rng.float(300...360), deformers: deformers)
+        deformers.append(.warp(amount: rng.float(12...22), scale: 220, seed: seed &+ 101))
+        return TrackCurve(radius: rng.float(330...390), deformers: deformers)
     }
 }
 
@@ -153,6 +155,38 @@ struct TrackTheme {
     static let all: [TrackTheme] = [.neonNight, .ember, .cryo, .acid]
 }
 
+/// A roofed stretch of the lap, given as lap fractions.
+struct Enclosure {
+    enum Kind {
+        /// Tight tube just outside the barriers.
+        case tunnel
+        /// Tall, wide indoor hall with walkways either side of the road.
+        case hall
+
+        /// Clear space beyond the barrier, ceiling height and corner chamfer, in metres.
+        var shape: (margin: Float, height: Float, chamfer: Float) {
+            switch self {
+            case .tunnel: return (1.2, 7.4, 2.4)
+            case .hall: return (9, 15, 4.5)
+            }
+        }
+    }
+
+    var kind: Kind
+    var start: Float
+    var length: Float
+
+    /// One tunnel and one hall, clear of the start line.
+    static func random(seed: UInt64) -> [Enclosure] {
+        var rng = SplitMix64(seed: seed &* 31 &+ 5)
+        let tunnel = Enclosure(kind: .tunnel, start: rng.float(0.12...0.3), length: rng.float(0.07...0.11))
+        let hall = Enclosure(kind: .hall, start: rng.float(0.52...0.76), length: rng.float(0.06...0.09))
+        return rng.float() < 0.5 ? [tunnel, hall]
+            : [Enclosure(kind: .hall, start: tunnel.start, length: hall.length),
+               Enclosure(kind: .tunnel, start: hall.start, length: tunnel.length)]
+    }
+}
+
 /// Everything about a circuit derives from this: the curve, the seed for textures
 /// and city placement, and the theme.
 struct TrackDefinition {
@@ -164,6 +198,8 @@ struct TrackDefinition {
     var halfWidth: Float = 8
     var widthVariation: Float = 1.5
     var banking: Float = 1
+    /// Tunnels and halls; `nil` derives them from the seed.
+    var enclosures: [Enclosure]? = nil
 }
 
 enum TrackLibrary {
@@ -173,8 +209,11 @@ enum TrackLibrary {
             name: "Neon Meridian", seed: 11,
             curve: TrackCurve(radius: 330, deformers: [
                 .lobes(count: 3, amount: 0.17, phase: 0.4),
-                .lobes(count: 5, amount: 0.06, phase: 2.1),
-                .pinch(angle: 3.9, amount: 0.24, width: 0.24),
+                .lobes(count: 5, amount: 0.09, phase: 2.1),
+                .lobes(count: 8, amount: 0.055, phase: 0.9),
+                .lobes(count: 11, amount: 0.03, phase: 4.0),
+                .pinch(angle: 3.9, amount: 0.26, width: 0.2),
+                .pinch(angle: 1.2, amount: 0.18, width: 0.16),
                 .hills(count: 1, height: 22, phase: 1.0),
                 .hills(count: 3, height: 7, phase: 0.3),
                 .stretch(x: 1.25, z: 0.9),

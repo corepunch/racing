@@ -7,7 +7,7 @@ enum DeckPattern: Int, CaseIterable {
 }
 
 enum WallPattern: Int, CaseIterable {
-    case strip, chevrons, hazard
+    case strip, chevrons, hazard, label
 }
 
 struct TrackSection {
@@ -15,6 +15,10 @@ struct TrackSection {
     var wall: WallPattern
     /// Flips the deck texture across the road, so `turn` arrows point left.
     var mirrored = false
+    var enclosure: Enclosure.Kind? = nil
+    /// First and last section of an enclosure get a portal face.
+    var portalIn = false
+    var portalOut = false
 }
 
 /// Chooses the texture of every section from the curve: repeating motifs on the
@@ -32,9 +36,25 @@ enum TrackSections {
             [.plain, .chevrons, .plain, accents.randomElement(using: &rng)!,
              .plain, accents.randomElement(using: &rng)!]
         }
-        let bend: Float = 0.006, sharp: Float = 0.011
+        let bend: Float = 0.008, sharp: Float = 0.015
 
-        return (0..<n).map { i in
+        var enclosed = [Enclosure.Kind?](repeating: nil, count: n)
+        for e in path.definition.enclosures ?? Enclosure.random(seed: path.definition.seed) {
+            let first = max(2, Int((e.start * Float(n)).rounded()))
+            let last = min(n - 3, first + max(3, Int((e.length * Float(n)).rounded())))
+            guard first <= last else { continue }
+            for i in first...last { enclosed[i] = e.kind }
+        }
+
+        return (0..<n).map { i -> TrackSection in
+            var section = surface(i)
+            section.enclosure = enclosed[i]
+            section.portalIn = enclosed[i] != nil && enclosed[i - 1] == nil
+            section.portalOut = enclosed[i] != nil && enclosed[i + 1] == nil
+            return section
+        }
+
+        func surface(_ i: Int) -> TrackSection {
             let here = curvature[i]
             let ahead = [curvature[(i + 1) % n], curvature[(i + 2) % n]].max { abs($0) < abs($1) }!
             if i == 0 { return TrackSection(deck: .start, wall: .strip) }
@@ -46,7 +66,7 @@ enum TrackSections {
                 return TrackSection(deck: i % 2 == 0 ? .turn : .plain, wall: .chevrons, mirrored: here < 0)
             }
             let motif = motifs[(i / 12) % motifs.count]
-            return TrackSection(deck: motif[i % motif.count], wall: .strip)
+            return TrackSection(deck: motif[i % motif.count], wall: i % 3 == 1 ? .label : .strip)
         }
     }
 }
@@ -61,13 +81,39 @@ enum TrackMeshBuilder {
         func position(_ halfWidth: Float) -> SIMD2<Float> { SIMD2(halfWidth * scale + offset, y) }
     }
 
-    private enum Kind { case deck, gutter, wallRight, wallLeft, hull, belly, barrier }
+    private enum Kind { case deck, gutter, wallRight, wallLeft, hull, belly, barrier, tunnelWall, tunnelLight }
+    private typealias Piece = (a: Point, b: Point, kind: Kind)
+
+    private static let wallHeight: Float = 1.3
+
+    /// Inner and outer rings of an enclosure, right-hand base over the roof to the left-hand base.
+    private static func rings(_ kind: Enclosure.Kind) -> (inner: [Point], outer: [Point]) {
+        let (margin, height, chamfer) = kind.shape
+        let w = 1.4 + margin, thick: Float = 1.6
+        let wo = w + thick, ho = height + thick, co = chamfer + 0.7
+        func ring(_ base: Float, _ w: Float, _ y: Float, _ h: Float, _ c: Float) -> [Point] {
+            [Point(scale: 1, offset: base, y: y), Point(scale: 1, offset: w, y: y),
+             Point(scale: 1, offset: w, y: h - c), Point(scale: 1, offset: w - c, y: h),
+             Point(scale: -1, offset: -(w - c), y: h), Point(scale: -1, offset: -w, y: h - c),
+             Point(scale: -1, offset: -w, y: y), Point(scale: -1, offset: -base, y: y)]
+        }
+        return (ring(1.4, w, wallHeight, height, chamfer), ring(shoulder, wo, -0.4, ho, co))
+    }
+
+    /// Inside faces look inward (walls, light chamfers, ceiling); the shell outside is hull plating.
+    private static func enclosureProfile(_ kind: Enclosure.Kind) -> [Piece] {
+        let (inner, outer) = rings(kind)
+        let kinds: [Kind] = [.hull, .tunnelWall, .tunnelLight, .tunnelWall, .tunnelLight, .tunnelWall, .hull]
+        var pieces: [Piece] = (0..<7).map { (inner[$0], inner[$0 + 1], kinds[$0]) }
+        pieces += (0..<7).map { (outer[$0 + 1], outer[$0], .hull) }
+        return pieces
+    }
 
     /// Counter-clockwise when looking along the track, so every face's outward
     /// normal is on the left of its a→b direction.
-    private static let profile: [(a: Point, b: Point, kind: Kind)] = {
+    private static let profile: [Piece] = {
         func p(_ scale: Float, _ offset: Float, _ y: Float) -> Point { Point(scale: scale, offset: offset, y: y) }
-        let wallHeight: Float = 1.3, keel: Float = -2.6
+        let keel: Float = -2.6
         return [
             (p(-1, 0, 0), p(1, 0, 0), .deck),
             (p(1, 0, 0), p(1, 0.4, 0), .gutter),
@@ -96,20 +142,24 @@ enum TrackMeshBuilder {
     private static let hullSlot = gutterSlot + 1
     private static let bellySlot = gutterSlot + 2
     private static let barrierSlot = gutterSlot + 3
+    private static let tunnelWallSlot = gutterSlot + 4
+    private static let tunnelLightSlot = gutterSlot + 5
 
     static func buildTrackNode(path: TrackPath) -> SCNNode {
         let theme = path.definition.theme, seed = path.definition.seed
         let sections = TrackSections.plan(path: path)
         let per = TrackPath.sectionSamples
-        var mesh = MeshBuilder(materialCount: barrierSlot + 1)
+        var mesh = MeshBuilder(materialCount: tunnelLightSlot + 1)
+        let enclosures: [Enclosure.Kind: [Piece]] = [.tunnel: enclosureProfile(.tunnel), .hall: enclosureProfile(.hall)]
 
         for (si, section) in sections.enumerated() {
+            let pieces = profile + (section.enclosure.flatMap { enclosures[$0] } ?? [])
             var previous: [(UInt32, UInt32)] = []
             for row in 0...per {
                 let s = path.sample(at: si * per + row)
                 let v = Float(row) / Float(per)
                 var current: [(UInt32, UInt32)] = []
-                for piece in profile {
+                for piece in pieces {
                     let a = piece.a.position(s.halfWidth), b = piece.b.position(s.halfWidth)
                     let d = b - a
                     let normal = simd_normalize(s.right * -d.y + s.up * d.x)
@@ -118,17 +168,27 @@ enum TrackMeshBuilder {
                     var ua = SIMD2<Float>(0, v), ub = SIMD2<Float>(1, v)
                     switch piece.kind {
                     case .deck: if section.mirrored { swap(&ua, &ub) }
-                    case .wallLeft: swap(&ua, &ub)
+                    case .wallLeft:
+                        swap(&ua, &ub)
+                        // Lettering must not come out mirrored on the opposite wall.
+                        if section.wall == .label { ua.y = 1 - v; ub.y = 1 - v }
                     case .hull:
                         ua = SIMD2(0, v * 2); ub = SIMD2(simd_length(d) / 8, v * 2)
                     case .belly:
                         ua.y = v * 2; ub.y = v * 2
-                    case .wallRight, .gutter, .barrier: break
+                    case .tunnelWall:
+                        // Ceiling is centred on the road; walls start at the walkway.
+                        if abs(d.x) > abs(d.y) {
+                            ua.x = a.x / 8 + 0.5; ub.x = b.x / 8 + 0.5
+                        } else {
+                            ua.x = (a.y - wallHeight) / 8; ub.x = (b.y - wallHeight) / 8
+                        }
+                    case .wallRight, .gutter, .barrier, .tunnelLight: break
                     }
                     current.append((mesh.vertex(pa, normal, ua), mesh.vertex(pb, normal, ub)))
                 }
                 if row > 0 {
-                    for (pi, piece) in profile.enumerated() {
+                    for (pi, piece) in pieces.enumerated() {
                         let slot: Int
                         switch piece.kind {
                         case .deck: slot = section.deck.rawValue
@@ -137,12 +197,31 @@ enum TrackMeshBuilder {
                         case .hull: slot = hullSlot
                         case .belly: slot = bellySlot
                         case .barrier: slot = barrierSlot
+                        case .tunnelWall: slot = tunnelWallSlot
+                        case .tunnelLight: slot = tunnelLightSlot
                         }
                         let (a, b) = previous[pi], (c, d) = current[pi]
                         mesh.quad(slot, a, b, d, c)
                     }
                 }
                 previous = current
+            }
+            // Portal faces close the gap between the inner and outer rings.
+            if let kind = section.enclosure {
+                for (exit, row) in [(false, 0), (true, per)] where exit ? section.portalOut : section.portalIn {
+                    let s = path.sample(at: si * per + row)
+                    let normal = simd_cross(s.up, s.right) * (exit ? 1 : -1)
+                    let (inner, outer) = rings(kind)
+                    func vertex(_ p: Point) -> UInt32 {
+                        let q = p.position(s.halfWidth)
+                        return mesh.vertex(s.position + s.right * q.x + s.up * q.y, normal, q / 8)
+                    }
+                    for k in 0..<7 {
+                        let i0 = vertex(inner[k]), i1 = vertex(inner[k + 1])
+                        let o0 = vertex(outer[k]), o1 = vertex(outer[k + 1])
+                        if exit { mesh.quad(hullSlot, i0, i1, o1, o0) } else { mesh.quad(hullSlot, i0, o0, o1, i1) }
+                    }
+                }
             }
         }
 
@@ -151,13 +230,18 @@ enum TrackMeshBuilder {
                 .material(name: "deck-\($0)", glow: 2.2)
         }
         materials += WallPattern.allCases.map {
-            ProceduralTextures.wall($0, theme: theme, seed: seed &+ 40 &+ UInt64($0.rawValue))
+            ProceduralTextures.wall($0, theme: theme, seed: seed &+ 40 &+ UInt64($0.rawValue),
+                                    label: "\(path.definition.name.uppercased())  //  MAGLOCK ZONE")
                 .material(name: "wall-\($0)", glow: 2.2)
         }
         materials.append(neon(theme.neonA, intensity: 2.5))
         materials.append(hullMaterial(theme: theme, seed: seed))
         materials.append(ProceduralTextures.belly(theme: theme, seed: seed &+ 61).material(name: "belly", glow: 2.5))
         materials.append(SCNMaterial())
+        materials.append(ProceduralTextures.tunnelWall(theme: theme, seed: seed &+ 62)
+            .material(name: "tunnel-wall", glow: 3))
+        materials.append(ProceduralTextures.tunnelLight(theme: theme, seed: seed &+ 63)
+            .material(name: "tunnel-light", glow: 3.5))
 
         let node = SCNNode(geometry: mesh.geometry(materials: materials, skipping: [barrierSlot]))
         node.name = "trackMesh"

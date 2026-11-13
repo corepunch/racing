@@ -24,7 +24,7 @@ enum CityScenery {
 
         towers(path: path, floorY: floorY, rng: &rng, mesh: &mesh)
         pylons(path: path, floorY: floorY, mesh: &mesh)
-        gates(path: path, rng: &rng, mesh: &mesh)
+        let signs = gates(path: path, rng: &rng, mesh: &mesh)
 
         let mid = (path.boundsMin + path.boundsMax) / 2
         let reach: Float = 4000
@@ -49,6 +49,34 @@ enum CityScenery {
         let node = SCNNode(geometry: mesh.geometry(materials: materials))
         node.name = "city"
         node.castsShadow = false
+        signs.forEach(node.addChildNode)
+        return node
+    }
+
+    /// Additive glowing lettering on a quad; `corners` are bottom-left, bottom-right,
+    /// top-right, top-left as the reader sees them.
+    private static func sign(_ image: UIImage, corners: [[SIMD3<Float>]]) -> SCNNode {
+        var mesh = MeshBuilder(materialCount: 1)
+        let rows = corners.count
+        var previous: (UInt32, UInt32)?
+        for (r, pair) in corners.enumerated() {
+            let v = 1 - Float(r) / Float(rows - 1)
+            let current = (mesh.vertex(pair[0], SIMD3(0, 1, 0), SIMD2(0, v)),
+                           mesh.vertex(pair[1], SIMD3(0, 1, 0), SIMD2(1, v)))
+            if let p = previous { mesh.quad(0, p.0, p.1, current.1, current.0) }
+            previous = current
+        }
+        let m = SCNMaterial()
+        m.lightingModel = .constant
+        m.diffuse.contents = UIColor.black
+        m.emission.contents = image
+        m.emission.intensity = 2.2
+        m.blendMode = .add
+        m.writesToDepthBuffer = false
+        m.isDoubleSided = true
+        let node = SCNNode(geometry: mesh.geometry(materials: [m]))
+        node.castsShadow = false
+        node.renderingOrder = 10
         return node
     }
 
@@ -162,12 +190,18 @@ enum CityScenery {
     // MARK: - Gates
 
     /// Arches over the road in the banked track frame; the one on the start line is heavier.
-    private static func gates(path: TrackPath, rng: inout SplitMix64, mesh: inout MeshBuilder) {
+    /// Returns the numbered signs: one on each beam and a numeral on the deck before it.
+    private static func gates(path: TrackPath, rng: inout SplitMix64, mesh: inout MeshBuilder) -> [SCNNode] {
+        let theme = path.definition.theme
+        var signs: [SCNNode] = []
+        let sections = TrackSections.plan(path: path)
         let per = TrackPath.sectionSamples
         let slot = Slot.hull.rawValue
         var section = 0
         var index = 0
         while section < path.sectionCount - 3 {
+            // Gates do not fit under a roof.
+            guard sections[section].enclosure == nil else { section += 1; continue }
             let s = path.samples[section * per + per / 2]
             let frame = simd_float3x3(columns: (s.right, s.up, simd_cross(s.right, s.up)))
             let start = section == 0
@@ -191,8 +225,31 @@ enum CityScenery {
                 mesh.box(neon, origin: s.position + s.up * (height + beam), basis: frame,
                          size: SIMD3(s.halfWidth * 1.2, 0.5, 0.5))
             }
+            // Sign on the face of the beam that oncoming cars see.
+            let text = start ? "START" : String(format: "%02d", index)
+            let lettering = ProceduralTextures.sign(text, color: neon == Slot.neonB.rawValue ? theme.neonB : theme.neonA)
+            let forward = simd_cross(s.up, s.right)
+            let signHeight = beam * 0.8
+            let half = min(signHeight * lettering.aspect, s.halfWidth * 1.6) / 2
+            let face = s.position + s.up * (height + beam / 2) - forward * 1.45
+            signs.append(sign(lettering.image, corners: [
+                [face - s.right * half - s.up * signHeight / 2, face + s.right * half - s.up * signHeight / 2],
+                [face - s.right * half + s.up * signHeight / 2, face + s.right * half + s.up * signHeight / 2],
+            ]))
+            // The same numeral laid along the deck on the approach.
+            if !start {
+                let centre = section * per + per / 2
+                let length: Float = 10
+                let halfDeck = min(length * lettering.aspect, 9) / 2
+                signs.append(sign(lettering.image, corners: (-9...(-4)).map { k in
+                    let d = path.sample(at: centre + k)
+                    let p = d.position + d.up * 0.05
+                    return [p - d.right * halfDeck, p + d.right * halfDeck]
+                }))
+            }
             section += Int.random(in: 9...15, using: &rng)
             index += 1
         }
+        return signs
     }
 }
