@@ -22,6 +22,8 @@ struct CarInput {
 final class Car {
     let design: CarDesign
     let node: SCNNode
+    /// Exhaust ribbons; lives in world space, so it is added to the scene root, not the car.
+    let trail: ExhaustTrail
     private let model: CarModel
     private var vehicle: SCNPhysicsVehicle?
     private weak var world: SCNPhysicsWorld?
@@ -48,6 +50,8 @@ final class Car {
     private(set) var yaw: Float = 0
     /// Speed across the road in m/s, positive to the right.
     private(set) var lateralSpeed: Float = 0
+    /// Rate of turn in rad/s, positive turning left.
+    private(set) var yawRate: Float = 0
     private(set) var worldPosition = SIMD3<Float>.zero
     /// Direction the car is moving in (its nose when nearly stopped), for the camera.
     private(set) var worldForward = SIMD3<Float>(0, 0, -1)
@@ -82,11 +86,14 @@ final class Car {
     private var stuckTime: Float = 0
     private var flippedTime: Float = 0
     private var wrongWayTime: Float = 0
+    private var stallTime: Float = 0
+    private var stallMark: Float = 0
 
     init(design: CarDesign) {
         self.design = design
         model = CarMesh.build(design)
         node = model.node
+        trail = ExhaustTrail(color: design.glow)
     }
 
     // MARK: - Physics set-up
@@ -163,8 +170,9 @@ final class Car {
         sampleIndex = Int(distance / track.step) % track.stepCount
         let frame = track.frame(at: distance)
         speed = 0; heading = 0; lateralSpeed = 0
-        reversing = false; scraping = false; smoothSteer = 0
-        stuckTime = 0; flippedTime = 0; wrongWayTime = 0
+        reversing = false; scraping = false; smoothSteer = 0; yawRate = 0
+        trail.reset()
+        stuckTime = 0; flippedTime = 0; wrongWayTime = 0; stallTime = 0; stallMark = progress
         setPose(frame, lateral: lateral, lift: 0.6)
         node.physicsBody?.velocity = SCNVector3Zero
         node.physicsBody?.angularVelocity = SCNVector4Zero
@@ -186,6 +194,18 @@ final class Car {
         setPose(track.frame(at: s), lateral: 0, lift: CarMesh.axleHeight - 0.1)
         for wheel in model.wheels { wheel.simdEulerAngles.x -= speed / 0.45 / 60 }
         CarMesh.setThrust(speed / design.spec.topSpeed, on: node)
+        updateTrail(node.simdWorldTransform, strength: speed / design.spec.topSpeed)
+    }
+
+    private func updateTrail(_ transform: simd_float4x4, strength: Float) {
+        let points = model.exhausts.map { e -> SIMD3<Float> in
+            let p = transform * SIMD4(e.x, e.y, e.z, 1)
+            return SIMD3(p.x, p.y, p.z)
+        }
+        let right = SIMD3<Float>(transform.columns.0.x, transform.columns.0.y, transform.columns.0.z)
+        // Nothing at a crawl; full glow from about a third of top speed.
+        trail.update(points: points, right: right, width: model.exhaustRadius * 1.1,
+                     strength: max(0, min(1, strength * 3 - 0.25)))
     }
 
     private static func wrap(_ x: Float, _ length: Float) -> Float {
@@ -279,6 +299,7 @@ final class Car {
         let exhaustTarget = min(1, speed / spec.topSpeed) + (boosting ? 0.6 : 0)
         exhaust += (exhaustTarget - exhaust) * min(1, 2.5 * dt)
         CarMesh.setThrust(exhaust, on: node)
+        updateTrail(transform, strength: exhaust)
     }
 
     /// Chassis stability, part of how the car handles rather than an assist: damps pitch
@@ -337,6 +358,8 @@ final class Car {
         let velocity = SIMD3<Float>(Float(v.x), Float(v.y), Float(v.z))
         speed = simd_length(velocity)
         yaw = atan2(forward.x, -forward.z)
+        let spin = body.angularVelocity
+        yawRate = simd_dot(SIMD3<Float>(Float(spin.x), Float(spin.y), Float(spin.z)) * Float(spin.w), up)
         worldForward = speed > 6 && simd_dot(velocity, forward) > 0 ? velocity / speed : forward
 
         // Nearest sample, searched around the last one so a nearby stretch of road is never mistaken for this one.
@@ -377,8 +400,21 @@ final class Car {
         flippedTime = upright < 0.3 ? flippedTime + dt : 0
         stuckTime = speed < 1.5 && input.brake < 0.05 && input.throttle > 0.5 ? stuckTime + dt : 0
         wrongWayTime = abs(heading) > 2 ? wrongWayTime + dt : 0
+        // Trying to drive but getting nowhere: nose against a barrier, creeping along it.
+        var stalled = false
+        if input.throttle > 0.5, input.brake < 0.05 {
+            stallTime += dt
+            if stallTime > 2.5 {
+                stalled = progress - stallMark < 12
+                stallTime = 0
+                stallMark = progress
+            }
+        } else {
+            stallTime = 0
+            stallMark = progress
+        }
         let fallen = worldPosition.y < frame.position.y - 25
-        guard fallen || flippedTime > 1 || stuckTime > 1.5 || wrongWayTime > 2 else { return false }
+        guard fallen || stalled || flippedTime > 1 || stuckTime > 1.5 || wrongWayTime > 2 else { return false }
         let room = frame.halfWidth - design.halfWidth - 1.5
         teleport(to: s, lateral: max(-room, min(room, d)), track: track)
         return true

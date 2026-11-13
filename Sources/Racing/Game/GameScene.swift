@@ -83,6 +83,7 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
     private(set) var cameraNode: SCNNode!
     private var camera: SCNCamera!
     private var cameraForward: SIMD3<Float>?
+    private var cameraLead: Float = 0
     private var cameraFOV: Float = 70
 
     // --- Inputs (set by GameViewController) ---
@@ -184,6 +185,7 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
         for car in cars {
             scene.rootNode.addChildNode(car.node)
             car.install(in: scene.physicsWorld)
+            scene.rootNode.addChildNode(car.trail.node)
         }
 
         setupCamera()
@@ -208,6 +210,7 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
         raceTime = 0
         steerHistory.removeAll()
         cameraForward = nil
+        cameraLead = 0
         phase = autoDrive ? .racing : .countdown(3.6)
         publishHUD()
     }
@@ -500,9 +503,13 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
     private func updateCamera(dt: Float) {
         let car = player
         let frame = track.frame(at: car.s)
-        // Follow the direction of travel, so a slide shows the car turned across the view.
+        // Look into the turn: the view swings ahead of the car by an angle that grows with
+        // how hard it is turning, so the road it is turning into comes on screen.
+        let lead = max(-0.5, min(0.5, car.yawRate * 0.5))
+        cameraLead += (lead - cameraLead) * min(1, 3 * dt)
+        let aim = simd_quatf(angle: cameraLead, axis: SIMD3<Float>(0, 1, 0)).act(car.worldForward)
         var forward = cameraForward ?? car.worldForward
-        forward = simd_normalize(forward + (car.worldForward - forward) * min(1, 6.5 * dt))
+        forward = simd_normalize(forward + (aim - forward) * min(1, 6.5 * dt))
         cameraForward = forward
         // Lean with the banking, but not all the way.
         let up = simd_normalize(simd_mix(SIMD3<Float>(0, 1, 0), frame.up, SIMD3(repeating: 0.65)))

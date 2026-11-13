@@ -7,6 +7,9 @@ struct CarModel {
     let node: SCNNode
     let wheels: [SCNNode]
     let radii: [Float]
+    /// Exhaust mouths in the chassis node's space, and their radius.
+    let exhausts: [SIMD3<Float>]
+    let exhaustRadius: Float
 }
 
 /// Builds a faceted open-wheel racer from a `CarDesign`. Nose points along −Z. The node's
@@ -239,9 +242,6 @@ enum CarMesh {
         plume.blendMode = .add
         plume.writesToDepthBuffer = false
         plume.isDoubleSided = true
-        let sparks = SCNNode()
-        sparks.name = "embers"
-        sparks.simdPosition = lower
         for e in exhausts {
             let cone = SCNCone(topRadius: 0, bottomRadius: CGFloat(r * 0.72), height: 1)
             cone.radialSegmentCount = 8
@@ -254,13 +254,7 @@ enum CarMesh {
             flame.castsShadow = false
             flames.addChildNode(flame)
 
-            // Embers shed from the exhaust; they stay behind in the world as the car pulls away.
-            let embers = SCNNode()
-            embers.simdPosition = e + SIMD3(0, 0, 0.1)
-            embers.addParticleSystem(emberSystem(color: color(design.glow), size: r))
-            sparks.addChildNode(embers)
         }
-        chassis.addChildNode(sparks)
         chassis.addChildNode(flames)
 
         let wheels = places.map { p -> SCNNode in
@@ -269,7 +263,8 @@ enum CarMesh {
             chassis.addChildNode(wheel)
             return wheel
         }
-        return CarModel(node: chassis, wheels: wheels, radii: places.map(\.r))
+        return CarModel(node: chassis, wheels: wheels, radii: places.map(\.r),
+                        exhausts: exhausts.map { $0 + lower }, exhaustRadius: r)
     }
 
     /// A fat slick on a bright rim. The carrier node is what the physics turns; a dark
@@ -307,57 +302,12 @@ enum CarMesh {
         return carrier
     }
 
-    private static let emberImage: UIImage = {
-        UIGraphicsImageRenderer(size: CGSize(width: 16, height: 16)).image { ctx in
-            let colors = [UIColor.white.cgColor, UIColor(white: 1, alpha: 0).cgColor] as CFArray
-            let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: colors, locations: [0, 1])!
-            ctx.cgContext.drawRadialGradient(gradient, startCenter: CGPoint(x: 8, y: 8), startRadius: 0,
-                                             endCenter: CGPoint(x: 8, y: 8), endRadius: 8, options: [])
-        }
-    }()
-
-    private static func emberSystem(color: UIColor, size: Float) -> SCNParticleSystem {
-        let system = SCNParticleSystem()
-        system.particleImage = emberImage
-        system.birthRate = 0
-        system.loops = true
-        system.particleLifeSpan = 0.26
-        system.particleLifeSpanVariation = 0.12
-        system.emittingDirection = SCNVector3(0, 0, 1)
-        system.spreadingAngle = 14
-        system.particleVelocity = 5
-        system.particleVelocityVariation = 3
-        system.particleSize = CGFloat(size * 0.9)
-        system.particleSizeVariation = CGFloat(size * 0.3)
-        system.particleColor = color
-        system.blendMode = .additive
-        system.isLightingEnabled = false
-        system.isAffectedByGravity = false
-        system.acceleration = SCNVector3(0, 1.5, 0)
-        let fade = CABasicAnimation()
-        fade.fromValue = 0.9
-        fade.toValue = 0
-        let shrink = CABasicAnimation()
-        shrink.fromValue = size * 0.9
-        shrink.toValue = size * 0.15
-        system.propertyControllers = [
-            .opacity: SCNParticlePropertyController(animation: fade),
-            .size: SCNParticlePropertyController(animation: shrink),
-        ]
-        return system
-    }
-
-    /// Sets the afterburners: 0 idle, 1 flat out, above 1 on boost. The plumes stretch
-    /// and the embers thicken with it.
+    /// Sets the afterburners: 0 idle, 1 flat out, above 1 on boost.
     static func setThrust(_ amount: Float, on car: SCNNode) {
         if let flames = car.childNode(withName: "flames", recursively: false) {
             let length = 0.12 + 1.15 * amount
             let girth = 0.75 + 0.3 * min(amount, 1.6)
             for flame in flames.childNodes { flame.simdScale = SIMD3(girth, length, girth) }
-        }
-        if let embers = car.childNode(withName: "embers", recursively: false) {
-            let rate = CGFloat(max(0, amount - 0.12) * 200)
-            for node in embers.childNodes { node.particleSystems?.first?.birthRate = rate }
         }
     }
 
@@ -390,5 +340,72 @@ enum CarMesh {
             pbr(SIMD3(0.03, 0.05, 0.08), metal: 1, rough: 0.08),
             glow,
         ]
+    }
+}
+
+/// Light ribbons streaming from a car's exhausts. Each frame the exhaust positions are
+/// recorded and the last few are joined into a flat strip that narrows and fades towards
+/// its tail. The strip lives in world space, so it bends through corners behind the car.
+final class ExhaustTrail {
+    let node = SCNNode()
+    private let color: SIMD3<Float>
+    private let material = SCNMaterial()
+    /// Newest first: for each recorded frame, every exhaust position and the car's right vector.
+    private var history: [(points: [SIMD3<Float>], right: SIMD3<Float>, strength: Float)] = []
+    private static let length = 16
+
+    init(color: SIMD3<Float>) {
+        self.color = color
+        material.lightingModel = .constant
+        material.diffuse.contents = UIColor.white
+        material.blendMode = .add
+        material.isDoubleSided = true
+        material.writesToDepthBuffer = false
+        node.castsShadow = false
+        node.renderingOrder = 10
+    }
+
+    func reset() {
+        history.removeAll()
+        node.geometry = nil
+    }
+
+    /// Records this frame and rebuilds the strip. `strength` (0...1) is how hot the exhaust is.
+    func update(points: [SIMD3<Float>], right: SIMD3<Float>, width: Float, strength: Float) {
+        history.insert((points, right, strength), at: 0)
+        if history.count > Self.length { history.removeLast() }
+        guard history.count > 1, let exhausts = history.first?.points.count, exhausts > 0 else {
+            node.geometry = nil
+            return
+        }
+        var vertices: [SCNVector3] = []
+        var colors: [SIMD3<Float>] = []
+        var indices: [UInt32] = []
+        for e in 0..<exhausts {
+            let base = UInt32(vertices.count)
+            for (i, frame) in history.enumerated() {
+                let t = Float(i) / Float(Self.length - 1)
+                let half = width * (1 - t) / 2
+                let fade = (1 - t) * (1 - t) * (1 - t) * frame.strength * 0.85
+                let p = frame.points[e]
+                for side: Float in [-1, 1] {
+                    let v = p + frame.right * (half * side)
+                    vertices.append(SCNVector3(v.x, v.y, v.z))
+                    colors.append(color * fade)
+                }
+                if i > 0 {
+                    let a = base + UInt32(i - 1) * 2
+                    indices += [a, a + 1, a + 2, a + 1, a + 3, a + 2]
+                }
+            }
+        }
+        let colorData = colors.withUnsafeBufferPointer { Data(buffer: $0) }
+        let colorSource = SCNGeometrySource(
+            data: colorData, semantic: .color, vectorCount: colors.count, usesFloatComponents: true,
+            componentsPerVector: 3, bytesPerComponent: 4, dataOffset: 0, dataStride: MemoryLayout<SIMD3<Float>>.stride)
+        let geometry = SCNGeometry(sources: [SCNGeometrySource(vertices: vertices), colorSource],
+                                   elements: [SCNGeometryElement(indices: indices, primitiveType: .triangles)])
+        geometry.firstMaterial = material
+        node.geometry = geometry
     }
 }
