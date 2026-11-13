@@ -270,8 +270,13 @@ enum CityScenery {
                          basis: frame, size: SIMD3(1.6, 0.25, 0.8))
             }
             // Sign on the face of the beam that oncoming cars see.
-            let text = start ? "START" : String(format: "%02d", index)
-            let lettering = ProceduralTextures.sign(text, color: neon == Slot.neonB.rawValue ? theme.neonB : theme.neonA)
+            // Every third gate carries a speed board instead of its number.
+            let words = ["MAX 600 KPH", "CAUTION", "GO"]
+            let numbered = start || index % 3 != 0
+            let text = start ? "START" : (numbered ? String(format: "%02d", index) : words[(index / 3) % words.count])
+            let amber = SIMD3<Float>(1.0, 0.68, 0.12)
+            let lettering = ProceduralTextures.sign(
+                text, color: numbered ? (neon == Slot.neonB.rawValue ? theme.neonB : theme.neonA) : amber)
             let forward = simd_cross(s.up, s.right)
             let signHeight = beam * 0.8
             let half = min(signHeight * lettering.aspect, s.halfWidth * 1.6) / 2
@@ -281,7 +286,7 @@ enum CityScenery {
                 [face - s.right * half + s.up * signHeight / 2, face + s.right * half + s.up * signHeight / 2],
             ]))
             // The same numeral laid along the deck on the approach.
-            if !start {
+            if !start, numbered {
                 let centre = section * per + per / 2
                 let length: Float = 10
                 let halfDeck = min(length * lettering.aspect, 9) / 2

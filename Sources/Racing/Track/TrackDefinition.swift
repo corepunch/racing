@@ -28,6 +28,8 @@ struct TrackCurve {
     /// When set, the control ring is a polygon of corners joined by straights: each corner
     /// is rounded over this fraction of its shorter adjoining edge. `nil` gives a flowing spline.
     var cornerCut: Float? = nil
+    /// Explicit corner polygon (flat); replaces the deformed circle when set.
+    var corners: [SIMD3<Float>]? = nil
     var deformers: [CurveDeformer]
 
     func controlPoints() -> [SIMD3<Float>] {
@@ -43,6 +45,7 @@ struct TrackCurve {
             let d = min(cut * min(simd_distance(a, p), simd_distance(p, b)), 170)
             return (p + simd_normalize(a - p) * d, p + simd_normalize(b - p) * d)
         }
+        var longest: (start: Int, count: Int, length: Float) = (0, 0, 0)
         for i in 0..<n {
             let (entry, exit) = corner(i)
             let steps = max(4, Int((simd_distance(entry, ring[i]) + simd_distance(ring[i], exit)) / spacing))
@@ -51,10 +54,38 @@ struct TrackCurve {
                 path.append(entry * (u * u) + ring[i] * (2 * u * t) + exit * (t * t))
             }
             let next = corner((i + 1) % n).entry
-            let straight = max(1, Int(simd_distance(exit, next) / spacing))
+            let length = simd_distance(exit, next)
+            let straight = max(1, Int(length / spacing))
+            if length > longest.length { longest = (path.count, straight, length) }
             for k in 0..<straight { path.append(exit + (next - exit) * (Float(k) / Float(straight))) }
         }
+        // Start a third of the way down the longest straight.
+        let first = longest.start + longest.count / 3
+        path = Array(path[first...] + path[..<first])
+
+        // An explicit polygon is flat: hills follow the distance round the lap instead.
+        if corners != nil {
+            for (i, p) in path.enumerated() {
+                let a = Float(i) / Float(path.count) * 2 * .pi
+                var y = p.y
+                for case let .hills(count, height, phase) in deformers { y += height * sin(Float(count) * a + phase) }
+                path[i].y = y
+            }
+        }
         return path
+    }
+
+    /// True when no two distant parts of the lap come close enough to touch.
+    func isClear(gap: Float = 75) -> Bool {
+        let path = controlPoints()
+        let n = path.count
+        for i in 0..<n {
+            for j in (i + 1)..<n where min(j - i, n - (j - i)) > 7 {
+                let d = SIMD2(path[i].x - path[j].x, path[i].z - path[j].z)
+                if simd_length_squared(d) < gap * gap { return false }
+            }
+        }
+        return true
     }
 
     private func ringPoints() -> [SIMD3<Float>] {
@@ -63,7 +94,7 @@ struct TrackCurve {
             var rng = SplitMix64(seed: seed)
             for i in 0..<pointCount { jitters[i, default: 0] += rng.float(-1...1) * amount }
         }
-        var points = (0..<pointCount).map { i -> SIMD3<Float> in
+        var points = corners ?? (0..<pointCount).map { i -> SIMD3<Float> in
             let a = Float(i) / Float(pointCount) * 2 * .pi
             var r = radius * (1 + (jitters[i] ?? 0))
             var y = altitude
@@ -75,7 +106,7 @@ struct TrackCurve {
                     let d = remainder(a - angle, 2 * .pi)
                     r -= radius * amount * exp(-(d * d) / (2 * width * width))
                 case let .hills(count, height, phase):
-                    y += height * sin(Float(count) * a + phase)
+                    y += height * sin(Float(count) * a + phase)   // unused for explicit corners
                 case .stretch, .shear, .warp, .jitter:
                     break
                 }
@@ -102,7 +133,67 @@ struct TrackCurve {
         return points
     }
 
-    /// A random circuit: an irregular polygon of long straights and rounded corners,
+    /// A street circuit: a few very long straights round an elongated polygon, broken up
+    /// by chicane kinks, inward bays and outward hairpin lobes, over big changes of height.
+    static func circuit(seed: UInt64) -> TrackCurve {
+        for attempt in 0..<24 {
+            let curve = makeCircuit(seed: seed &+ UInt64(attempt) &* 1009, features: true)
+            if curve.isClear() { return curve }
+        }
+        return makeCircuit(seed: seed, features: false)
+    }
+
+    private static func makeCircuit(seed: UInt64, features: Bool) -> TrackCurve {
+        var rng = SplitMix64(seed: seed &* 2654435761 &+ 17)
+        let count = Int.random(in: 5...7, using: &rng)
+        let axes = SIMD2<Float>(rng.float(620...820), rng.float(360...500))
+        let turn = rng.float(0...(2 * .pi))
+        let base = (0..<count).map { i -> SIMD2<Float> in
+            let a = (Float(i) + rng.float(-0.28...0.28)) / Float(count) * 2 * .pi
+            let r = rng.float(0.85...1.15)
+            let p = SIMD2(cos(a) * axes.x * r, sin(a) * axes.y * r)
+            return SIMD2(p.x * cos(turn) - p.y * sin(turn), p.x * sin(turn) + p.y * cos(turn))
+        }
+        let centre = base.reduce(SIMD2<Float>.zero, +) / Float(count)
+
+        var corners: [SIMD2<Float>] = []
+        for i in 0..<count {
+            let a = base[i], b = base[(i + 1) % count]
+            corners.append(a)
+            let length = simd_distance(a, b)
+            let along = (b - a) / length
+            let mid = (a + b) / 2
+            var inward = SIMD2(-along.y, along.x)
+            if simd_dot(inward, centre - mid) < 0 { inward = -inward }
+            let roll = rng.float()
+            let at = a + along * (length * rng.float(0.4...0.6))
+            guard features, length > 420, roll > 0.25 else { continue }
+            if roll < 0.5 {
+                // Chicane: a short sideways kink in the straight.
+                let half = rng.float(75...110), offset = rng.float(35...60) * (rng.float() < 0.5 ? -1 : 1)
+                corners += [at - along * half, at + inward * offset, at + along * half]
+            } else {
+                // Bay (inward) or lobe (outward): a detour off the straight with a hairpin feel.
+                let outward = roll > 0.78
+                let width = min(rng.float(190...290), length * 0.42)
+                var depth = rng.float(150...250)
+                if !outward { depth = min(depth, simd_distance(mid, centre) * 0.5) }
+                guard depth > 120 else { continue }
+                let normal = outward ? -inward : inward
+                let taper = width * rng.float(0.05...0.2)
+                corners += [at - along * (width / 2), at - along * (width / 2 - taper) + normal * depth,
+                            at + along * (width / 2 - taper) + normal * depth, at + along * (width / 2)]
+            }
+        }
+        let hills: [CurveDeformer] = [
+            .hills(count: 1, height: rng.float(24...42), phase: rng.float(0...(2 * .pi))),
+            .hills(count: 2, height: rng.float(12...22), phase: rng.float(0...(2 * .pi))),
+            .hills(count: 3, height: rng.float(4...10), phase: rng.float(0...(2 * .pi))),
+        ]
+        return TrackCurve(cornerCut: 0.42, corners: corners.map { SIMD3($0.x, 0, $0.y) }, deformers: hills)
+    }
+
+    /// A simpler loop: an irregular polygon of long straights and rounded corners,
     /// with one or two inward kinks and rolling height.
     static func random(seed: UInt64) -> TrackCurve {
         var rng = SplitMix64(seed: seed &* 7919 &+ 13)
@@ -152,6 +243,8 @@ struct TrackTheme {
     var metal: SIMD3<Float>
     var hull: SIMD3<Float>
     var window: SIMD3<Float>
+    /// How corroded the metalwork is, 0...1.
+    var rust: Float = 0.5
     var sunColor: SIMD3<Float>
     var sunIntensity: CGFloat
     var sunAngles: SIMD2<Float>
@@ -175,7 +268,7 @@ struct TrackTheme {
         neonA: SIMD3(1.00, 0.50, 0.08), neonB: SIMD3(0.10, 0.92, 0.78),
         paint: SIMD3(0.80, 0.16, 0.12), road: SIMD3(0.19, 0.17, 0.16),
         metal: SIMD3(0.72, 0.64, 0.57), hull: SIMD3(0.26, 0.21, 0.20),
-        window: SIMD3(1.00, 0.70, 0.35),
+        window: SIMD3(1.00, 0.70, 0.35), rust: 0.85,
         sunColor: SIMD3(1.00, 0.66, 0.40), sunIntensity: 1100, sunAngles: SIMD2(-.pi / 9, -.pi / 3),
         ambient: 220, environment: 1.3)
 
@@ -187,7 +280,7 @@ struct TrackTheme {
         neonA: SIMD3(0.15, 0.55, 1.00), neonB: SIMD3(1.00, 0.30, 0.08),
         paint: SIMD3(0.16, 0.25, 0.62), road: SIMD3(0.27, 0.28, 0.30),
         metal: SIMD3(0.82, 0.84, 0.88), hull: SIMD3(0.46, 0.50, 0.56),
-        window: SIMD3(0.75, 0.90, 1.00),
+        window: SIMD3(0.75, 0.90, 1.00), rust: 0.15,
         sunColor: SIMD3(1.00, 0.97, 0.92), sunIntensity: 1500, sunAngles: SIMD2(-.pi / 3.5, .pi / 6),
         ambient: 420, environment: 1.1)
 
@@ -245,8 +338,8 @@ struct TrackDefinition {
     var curve: TrackCurve
     var theme: TrackTheme
     /// Deck half-width in metres, and how far it swells and narrows along the lap.
-    var halfWidth: Float = 8
-    var widthVariation: Float = 1.5
+    var halfWidth: Float = 10
+    var widthVariation: Float = 2
     var banking: Float = 1
     /// Tunnels and halls; `nil` derives them from the seed.
     var enclosures: [Enclosure]? = nil
@@ -254,28 +347,15 @@ struct TrackDefinition {
 
 enum TrackLibrary {
     static let all: [TrackDefinition] = [
-        // Hand-tuned: a ten-corner circuit with one hard inward kink and a long descent.
-        TrackDefinition(
-            name: "Neon Meridian", seed: 11,
-            curve: TrackCurve(radius: 520, pointCount: 10, cornerCut: 0.3, deformers: [
-                .lobes(count: 3, amount: 0.17, phase: 0.4),
-                .jitter(amount: 0.15, seed: 4),
-                .pinch(angle: 3.9, amount: 0.3, width: 0.3),
-                .hills(count: 1, height: 24, phase: 1.0),
-                .hills(count: 3, height: 7, phase: 0.3),
-                .stretch(x: 1.3, z: 0.9),
-            ]),
-            theme: .neonNight),
-        TrackDefinition(name: "Ember Skyway", seed: 23, curve: .random(seed: 23), theme: .ember),
-        TrackDefinition(name: "Cryo Loop", seed: 37, curve: .random(seed: 37), theme: .cryo,
-                        halfWidth: 9, widthVariation: 2),
-        TrackDefinition(name: "Acid Spire", seed: 53, curve: .random(seed: 53), theme: .acid,
-                        banking: 1.3),
+        TrackDefinition(name: "Neon Meridian", seed: 11, curve: .circuit(seed: 11), theme: .neonNight),
+        TrackDefinition(name: "Ember Skyway", seed: 23, curve: .circuit(seed: 23), theme: .ember),
+        TrackDefinition(name: "Cryo Loop", seed: 37, curve: .circuit(seed: 37), theme: .cryo),
+        TrackDefinition(name: "Acid Spire", seed: 53, curve: .circuit(seed: 53), theme: .acid, banking: 1.3),
     ]
 
     /// Any seed gives a complete circuit: curve, city and textures.
     static func generated(seed: UInt64) -> TrackDefinition {
-        TrackDefinition(name: "Sector \(seed)", seed: seed, curve: .random(seed: seed),
+        TrackDefinition(name: "Sector \(seed)", seed: seed, curve: .circuit(seed: seed),
                         theme: TrackTheme.all[Int(seed % UInt64(TrackTheme.all.count))])
     }
 }

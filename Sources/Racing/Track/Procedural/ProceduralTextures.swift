@@ -238,6 +238,15 @@ enum ProceduralTextures {
         }
     }
 
+    /// Corrosion blooming out of the scuffed areas: brown, dull and non-metallic.
+    @inline(__always) private static func corrode(_ t: inout Texel, wear: Float, grain: Float, amount: Float) {
+        let r = smoothstep(0.45, 0.95, wear + grain * 0.2) * amount
+        let rust = SIMD3<Float>(0.42, 0.20, 0.09) * (0.75 + grain * 0.5)
+        t.albedo = simd_mix(t.albedo, rust, SIMD3(repeating: r))
+        t.metal = mix(t.metal, 0.1, r)
+        t.rough = mix(t.rough, 0.9, r)
+    }
+
     /// Rectangular plating with seams. `du`/`dv` are the texture's size in metres so seams stay square.
     private static func plates(_ u: Float, _ v: Float, cols: Int, rows: Int, size: SIMD2<Float>,
                                seam: Float, stagger: Bool, noise: Noise2D)
@@ -290,6 +299,10 @@ enum ProceduralTextures {
             var t = Texel()
             t.albedo = theme.road * (1 + streak * 0.3 + fine * 0.16 + blotch * 0.12 + grain * 0.07)
                 * (1 - rubber * 0.28)
+            // Brown run-off stains smeared along the direction of travel.
+            let stain = smoothstep(0.25, 0.7, n.fbm(u * 6, v * 2, octaves: 3, period: 2) + streak * 0.3)
+            t.albedo = simd_mix(t.albedo, SIMD3(0.30, 0.19, 0.11) * (1 + fine * 0.3),
+                                SIMD3(repeating: stain * 0.4 * theme.rust))
             t.metal = 0
             t.rough = 0.5 + blotch * 0.12 - rubber * 0.1
             t.height = grain * 0.12
@@ -328,13 +341,11 @@ enum ProceduralTextures {
                 t.paint(white, label!.coverage(pm, center: SIMD2(12.2, 2.6), size: 0.42) * wearMask)
 
             case .chevrons:
-                // Broad, faded arrowheads pointing the way.
-                var c: Float = 0
-                for k in 0..<3 {
-                    c = max(c, chevron(x, v - (0.42 + Float(k) * 0.26), halfWidth: 0.62, slope: 0.3,
-                                       thickness: 0.06, aa: aa))
-                }
-                t.paint(cream, c * wearMask * 0.6)
+                // One huge, weathered arrowhead set into a paler slab.
+                let slab = box(x, v - 0.5, 0.74, 0.42, aa)
+                t.albedo = simd_mix(t.albedo, t.albedo * 1.45 + 0.03, SIMD3(repeating: slab * 0.8))
+                let c = chevron(x, v - 0.72, halfWidth: 0.66, slope: 0.36, thickness: 0.13, aa: aa)
+                t.paint(dark * 2.2, c * slab * (0.45 + wearMask * 0.4))
 
             case .bands:
                 // Wide colour bands across the road with an arrowhead between them.
@@ -431,6 +442,7 @@ enum ProceduralTextures {
             var t = Texel()
             t.albedo = theme.hull * (0.9 + p.tint * 0.4) * m.tone * 1.5
             t.rough = 0.36 + m.wear * 0.2
+            corrode(&t, wear: m.wear, grain: m.grain, amount: theme.rust)
             t.height = -p.seam
             t.albedo *= 1 - p.seam * 0.7
             // Dark lip and kick plate.
@@ -480,6 +492,7 @@ enum ProceduralTextures {
             var t = Texel()
             t.albedo = theme.hull * (0.75 + p.tint * 0.5) * m.tone
             t.rough = 0.42 + m.wear * 0.25
+            corrode(&t, wear: m.wear, grain: m.grain, amount: theme.rust)
             let rib = band(fract(u * 16) - 0.5, 0.12, 0.05) * Float(p.tint > 0.55 ? 1 : 0)
             t.height = -p.seam + rib * 0.5 + p.bolt * 0.4
             t.albedo *= (1 - p.seam * 0.7) * (1 + rib * 0.12)
@@ -497,6 +510,7 @@ enum ProceduralTextures {
             var t = Texel()
             t.albedo = theme.hull * (0.7 + p.tint * 0.4) * m.tone
             t.rough = 0.45 + m.wear * 0.2
+            corrode(&t, wear: m.wear, grain: m.grain, amount: theme.rust)
             t.height = -p.seam
             t.glow(theme.neonA, box(u - 0.5, v - 0.5, 0.2, 0.2, 0.01))
             return t
@@ -517,6 +531,7 @@ enum ProceduralTextures {
             var t = Texel()
             t.albedo = theme.hull * (0.8 + p.tint * 0.5) * m.tone
             t.rough = 0.4 + m.wear * 0.25
+            corrode(&t, wear: m.wear, grain: m.grain, amount: theme.rust)
             t.height = -p.seam + p.bolt * 0.4
             t.albedo *= 1 - p.seam * 0.7
             // Structural rib across the direction of travel, with a thin signal line.
