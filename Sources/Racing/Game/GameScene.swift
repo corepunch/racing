@@ -216,7 +216,9 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
         // Feed inputs
         physics.throttle = throttleInput
         physics.brake    = brakeInput
-        physics.steer    = steerInput
+        // Steering assist: lean towards the racing line, giving way as the player steers harder.
+        let player = max(-1, min(1, steerInput))
+        physics.steer    = max(-1, min(1, player + (1 - abs(player)) * 0.55 * trackSteer()))
         if selfDrive { updateSelfDrive(time: time) }
 
         // Off the deck and falling into the city: put the car back on the road.
@@ -250,14 +252,20 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
 
     // MARK: - Self-drive (debug)
 
-    private func updateSelfDrive(time: TimeInterval) {
+    /// Steering that points the car at the track centre a speed-dependent distance ahead.
+    private func trackSteer() -> Float {
         let here = track.closestSampleIndex(to: physics.position)
         let step = track.totalLength / Float(track.stepCount)
-        // Aim at a point further ahead the faster we go.
         let ahead = track.sample(at: here + Int((14 + physics.speed * 0.45) / step))
         let to = ahead.position - physics.position
         let bearing = atan2(to.x, -to.z)
-        physics.steer = max(-1, min(1, remainder(bearing - physics.heading, 2 * .pi) * 3))
+        return max(-1, min(1, remainder(bearing - physics.heading, 2 * .pi) * 3))
+    }
+
+    private func updateSelfDrive(time: TimeInterval) {
+        let here = track.closestSampleIndex(to: physics.position)
+        let step = track.totalLength / Float(track.stepCount)
+        physics.steer = trackSteer()
         // Brake for the tightest curvature within braking distance.
         var tightest: Float = 0
         let reach = Int((30 + physics.speed * 2.2) / step)

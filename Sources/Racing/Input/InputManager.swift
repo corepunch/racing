@@ -5,6 +5,8 @@ final class InputView: UIView {
     private let controlDiameter: CGFloat = 100
     /// Finger travel for full lock: the whole screen width, so a given drag steers gently.
     private var steeringDistance: CGFloat { max(bounds.width, 1) }
+    /// Downward finger travel for a full stop.
+    private var brakeDistance: CGFloat { max(max(bounds.width, bounds.height) * 0.38, 1) }
     private var keys = Set<UIKeyboardHIDUsage>()
     private var activeTouch: UITouch?
     private var origin = CGPoint.zero
@@ -36,12 +38,12 @@ final class InputView: UIView {
         current = touch.location(in: self)
         let horizontal = (current.x - origin.x) / steeringDistance
         touchSteer = Float((horizontal < 0 ? -1 : 1) * logarithmicResponse(abs(horizontal)))
-        let downward = max(0, (current.y - origin.y) / max(bounds.width * 0.5, 1))
-        // Ease off the accelerator first, then build braking slowly at the start
-        // and more strongly as the drag approaches its full distance.
-        touchThrottle = Float(max(0, 1 - downward / 0.4))
-        let brakeProgress = max(0, min(1, (downward - 0.4) / 0.6))
-        touchBrake = Float(brakeProgress * brakeProgress)
+        let downward = max(0, (current.y - origin.y) / brakeDistance)
+        // Ease off the accelerator over the first quarter, then build braking gently:
+        // cubic, so most of the drag only trims speed and full stop needs the whole distance.
+        touchThrottle = Float(max(0, 1 - downward / 0.25))
+        let brakeProgress = max(0, min(1, (downward - 0.25) / 0.75))
+        touchBrake = Float(brakeProgress * brakeProgress * brakeProgress)
         setNeedsDisplay()
     }
 
@@ -71,7 +73,7 @@ final class InputView: UIView {
         ring.stroke()
 
         let dx = max(-steeringDistance, min(steeringDistance, current.x - origin.x))
-        let dy = max(0, min(controlDiameter, current.y - origin.y))
+        let dy = max(0, min(brakeDistance, current.y - origin.y))
         UIColor(white: 1, alpha: 0.8).setFill()
         UIBezierPath(ovalIn: CGRect(x: origin.x + dx - 10, y: origin.y + dy - 10,
                                     width: 20, height: 20)).fill()

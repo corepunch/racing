@@ -6,7 +6,8 @@ import simd
 final class CarController {
     let mass: CGFloat = 1_900
     private let engineForce: CGFloat = 34_000
-    private let brakeForce: CGFloat = 46_000
+    /// About 1.1 g on its own; split front-biased so the car squats rather than tips.
+    private let brakeForce: CGFloat = 21_000
     /// Speed (m/s) at which drive force has faded to nothing.
     static let topSpeed: Float = 106
     /// Aerodynamic grip in N per (m/s)², pressing the car into the road.
@@ -128,12 +129,42 @@ final class CarController {
                 let axis = tilt / amount
                 body.applyTorque(SCNVector4(axis.x, axis.y, axis.z, amount * 42_000), asImpulse: false)
             }
+            applyStabilityAssist(body: body, up: up, transform: transform, steering: Float(steering))
         }
         for index in 0..<4 {
-            vehicle.setSteeringAngle(index < 2 ? steering : 0, forWheelAt: index)
+            let front = index < 2
+            vehicle.setSteeringAngle(front ? steering : 0, forWheelAt: index)
             vehicle.applyEngineForce(engineForce * drive / 4, forWheelAt: index)
-            vehicle.applyBrakingForce(brakeForce * braking / 4, forWheelAt: index)
+            vehicle.applyBrakingForce(brakeForce * braking * (front ? 0.3 : 0.2), forWheelAt: index)
         }
+    }
+
+    /// Driver aids: damps pitch and roll so the car cannot tip over, trims yaw beyond what
+    /// the steering asks for so it does not spin, and bleeds off sideways slide.
+    private func applyStabilityAssist(body: SCNPhysicsBody, up: SIMD3<Float>, transform: simd_float4x4, steering: Float) {
+        guard upright > 0.5 else { return }
+        let av = body.angularVelocity
+        let omega = SIMD3<Float>(Float(av.x), Float(av.y), Float(av.z)) * Float(av.w)
+        let yawRate = simd_dot(omega, up)
+        let tumble = omega - up * yawRate
+        let tumbleRate = simd_length(tumble)
+        if tumbleRate > 1e-3 {
+            let axis = -tumble / tumbleRate
+            body.applyTorque(SCNVector4(axis.x, axis.y, axis.z, tumbleRate * 9_000), asImpulse: false)
+        }
+        // Expected yaw rate for this steering angle on a 2.6 m wheelbase, plus a little slack.
+        let expected = speed * abs(tan(steering)) / 2.6
+        let excess = abs(yawRate) - expected - 0.15
+        if excess > 0 {
+            let axis = up * (yawRate > 0 ? -1 : 1)
+            body.applyTorque(SCNVector4(axis.x, axis.y, axis.z, excess * 7_000), asImpulse: false)
+        }
+        guard speed > 3 else { return }
+        let right = SIMD3<Float>(transform.columns.0.x, transform.columns.0.y, transform.columns.0.z)
+        let v = body.velocity
+        let sideways = simd_dot(SIMD3<Float>(Float(v.x), Float(v.y), Float(v.z)), right)
+        let grip = -right * sideways * Float(mass) * 1.6
+        body.applyForce(SCNVector3(grip.x, grip.y, grip.z), asImpulse: false)
     }
 
     /// Read SceneKit's simulated pose after the physics step.
