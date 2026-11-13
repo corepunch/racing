@@ -76,20 +76,27 @@ struct TextMask {
         let string = NSAttributedString(string: text, attributes: [
             .font: font, .foregroundColor: UIColor.white, .kern: size * tracking,
         ])
+        // Condensed DIN stretched wide gives square, extended capitals.
+        let stretch: CGFloat = 1.5
         let bounds = string.size()
-        let w = max(4, Int(bounds.width.rounded(.up)) + 4)
+        let w = max(4, Int((bounds.width * stretch).rounded(.up)) + 4)
         var data = [UInt8](repeating: 0, count: w * height)
         data.withUnsafeMutableBytes { raw in
             guard let ctx = CGContext(data: raw.baseAddress, width: w, height: height, bitsPerComponent: 8,
                                       bytesPerRow: w, space: CGColorSpaceCreateDeviceGray(),
                                       bitmapInfo: CGImageAlphaInfo.none.rawValue) else { return }
             ctx.translateBy(x: 0, y: CGFloat(height))
-            ctx.scaleBy(x: 1, y: -1)
+            ctx.scaleBy(x: stretch, y: -1)
             UIGraphicsPushContext(ctx)
             // Centre the cap height; DIN's line box has extra room above the capitals.
             let y = (CGFloat(height) - font.capHeight) / 2 - (font.ascender - font.capHeight)
-            string.draw(at: CGPoint(x: 2, y: y))
+            string.draw(at: CGPoint(x: 2 / stretch, y: y))
             UIGraphicsPopContext()
+        }
+        // A thin horizontal cut through every letter.
+        let cut = Int(Float(height) * 0.43)
+        for row in cut..<(cut + max(2, height / 22)) {
+            for x in 0..<w { data[row * w + x] = 0 }
         }
         width = w
         self.height = height
@@ -293,9 +300,26 @@ enum ProceduralTextures {
             let wearMask = 1 - 0.75 * smoothstep(0.5, 0.75, chips * 0.5 + 0.5 - 0.2 + m.wear * 0.4)
             let x = u * 2 - 1
 
-            // Continuous edge lines tie neighbouring sections together.
-            let edge = max(band(u - 0.035, 0.008, aa), band(u - 0.965, 0.008, aa))
-            t.paint(theme.paint, edge * wearMask)
+            // The edge band runs through every section and ties them together.
+            let e = min(u, 1 - u) / 0.105          // 0 at the gutter, 1 at the band's inner edge
+            if pattern != .hazard, e < 1.2 {
+                switch theme.edge {
+                case .sawtooth:
+                    // Pale triangles biting into the deck over a dark strip, four per section.
+                    let tooth = 1 - abs(fract(v * 4) * 2 - 1)
+                    let tri = 1 - smoothstep(-0.03, 0.03, e - tooth * 0.95)
+                    t.paint(dark, (1 - smoothstep(0.97, 1.0, e)) * 0.9)
+                    t.paint(theme.metal * 0.95, tri * (0.6 + wearMask * 0.4))
+                    t.paint(theme.paint, band(e - 1.08, 0.05, 0.03) * wearMask)
+                case .kerb:
+                    // Racing kerb: long alternating blocks, then a thin line.
+                    let block = fract(v * 4) < 0.5
+                    let kerb = (1 - smoothstep(0.6, 0.66, e)) * band(fract(v * 8) - 0.5, 0.47, 0.02)
+                    t.paint(block ? theme.paint : SIMD3(0.86, 0.82, 0.72), kerb * (0.55 + wearMask * 0.45))
+                    t.height += kerb * 0.12 * (0.5 + 0.5 * sin(v * 64 * .pi))
+                    t.paint(SIMD3(0.86, 0.82, 0.72), band(e - 0.95, 0.06, 0.03) * wearMask)
+                }
+            }
 
             switch pattern {
             case .plain:

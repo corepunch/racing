@@ -94,6 +94,14 @@ struct TrackCurve {
 
 /// Colours that drive every generated texture, the sky and the lighting.
 struct TrackTheme {
+    /// How the outer strip of the deck is marked.
+    enum Edge {
+        /// Pale triangles on a dark strip, pointing into the road.
+        case sawtooth
+        /// Long two-colour kerb blocks with a thin inner line.
+        case kerb
+    }
+    var edge: Edge = .sawtooth
     var skyZenith: SIMD3<Float>
     var skyHorizon: SIMD3<Float>
     var skyGlow: SIMD3<Float>
@@ -125,15 +133,17 @@ struct TrackTheme {
         ambient: 140, environment: 1.6)
 
     static let ember = TrackTheme(
+        edge: .kerb,
         skyZenith: SIMD3(0.10, 0.09, 0.26), skyHorizon: SIMD3(0.78, 0.36, 0.20),
         skyGlow: SIMD3(1.00, 0.62, 0.18), stars: 0.3,
         neonA: SIMD3(1.00, 0.50, 0.08), neonB: SIMD3(0.10, 0.92, 0.78),
-        paint: SIMD3(0.93, 0.93, 0.90), metal: SIMD3(0.72, 0.64, 0.57), hull: SIMD3(0.26, 0.21, 0.20),
+        paint: SIMD3(0.80, 0.16, 0.12), metal: SIMD3(0.72, 0.64, 0.57), hull: SIMD3(0.26, 0.21, 0.20),
         window: SIMD3(1.00, 0.70, 0.35),
         sunColor: SIMD3(1.00, 0.66, 0.40), sunIntensity: 1100, sunAngles: SIMD2(-.pi / 9, -.pi / 3),
         ambient: 220, environment: 1.3)
 
     static let cryo = TrackTheme(
+        edge: .kerb,
         skyZenith: SIMD3(0.20, 0.42, 0.74), skyHorizon: SIMD3(0.74, 0.84, 0.93),
         skyGlow: SIMD3(1.00, 0.97, 0.90), stars: 0,
         fogStart: 220, fogEnd: 1300,
