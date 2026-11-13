@@ -27,11 +27,12 @@ ln -sfn "$PWD/Resources" /tmp/RacingPropsCheck.app/Contents/Resources
 swiftc Sources/Racing/Car/CarStyle.swift Sources/Racing/Car/CarNode.swift Sources/Racing/Track/TrackPath.swift Sources/Racing/Track/TrackMesh.swift Sources/Racing/Game/PhysicsCategory.swift Tools/check_prop_placement.swift -o /tmp/RacingPropsCheck.app/Contents/MacOS/RacingPropsCheck
 /tmp/RacingPropsCheck.app/Contents/MacOS/RacingPropsCheck
 ```
-## Car collision check
+## Car physics check
 
-This opens a small SceneKit window on macOS and checks that the production car
-controller lands on terrain, responds to a slope, and cannot tunnel through a
-transparent obstacle at high speed. Run from the repository root:
+This opens a small SceneKit window on macOS and checks four-wheel ground contact,
+forward acceleration, right steering, braking, automatic reverse, and the return
+to forward drive on a flat surface using the
+production controller. Run from the repository root:
 
 ```sh
 swiftc Sources/Racing/Game/PhysicsCategory.swift Sources/Racing/Car/CarController.swift Tools/check_car_collisions.swift -o /tmp/RacingCollisionCheck

@@ -243,6 +243,24 @@ final class CarNode: SCNNode {
         }
     }
 
+    /// Move each visual wheel under a direct chassis child so SceneKit can
+    /// update its suspension, steering and rotation independently.
+    func preparePhysicsWheels() -> [SCNNode] {
+        let visuals = [leftFrontWheel, rightFrontWheel, leftRearWheel, rightRearWheel]
+        return visuals.map { visual in
+            let transform = visual.convertTransform(SCNMatrix4Identity, to: self)
+            let carrier = SCNNode()
+            carrier.position = SCNVector3(transform.m41, transform.m42, transform.m43)
+            addChildNode(carrier)
+            visual.removeFromParentNode()
+            var local = transform
+            local.m41 = 0; local.m42 = 0; local.m43 = 0
+            visual.transform = local
+            carrier.addChildNode(visual)
+            return carrier
+        }
+    }
+
     // MARK: - Wheel animation
 
     func animateWheels(speed: Float, steer: Float, dt: Float) {

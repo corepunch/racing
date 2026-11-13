@@ -8,7 +8,6 @@ final class GameViewController: UIViewController {
     private var gameScene: GameScene!
     private var hudScene: HUDScene!
     private var controlsView: InputView!
-    private var inputManager: InputManager!
     private var hudTimer: Timer?
 
     override func viewDidLoad() {
@@ -60,12 +59,11 @@ final class GameViewController: UIViewController {
         hudScene.buildMinimapPath(trackPath: gameScene.track)
         scnView.overlaySKScene = hudScene
 
-        // ── Keyboard and game controllers ────────────────────────────────────
+        // ── Touch and keyboard controls ───────────────────────────────────────
         controlsView = InputView(frame: view.bounds)
         controlsView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         view.addSubview(controlsView)
         controlsView.becomeFirstResponder()
-        inputManager = InputManager()
         NotificationCenter.default.addObserver(self, selector: #selector(resetInput),
                                                name: UIApplication.willResignActiveNotification, object: nil)
 
@@ -77,10 +75,9 @@ final class GameViewController: UIViewController {
 
     private func pollHUD() {
         guard let gs = gameScene, let hud = hudScene else { return }
-        let input = inputManager.state()
-        gs.steerInput = controlsView.steer != 0 ? controlsView.steer : input.steer
-        gs.throttleInput = max(controlsView.throttle, input.throttle)
-        gs.brakeInput = max(controlsView.brake, input.brake)
+        gs.steerInput = controlsView.steer
+        gs.brakeInput = controlsView.brake
+        gs.throttleInput = controlsView.throttle
         hud.updateHUD(
             speed:    gs.displaySpeed,
             lap:      gs.displayLap,
@@ -99,7 +96,7 @@ final class GameViewController: UIViewController {
         gameScene?.brakeInput = 0
     }
 
-    override var supportedInterfaceOrientations: UIInterfaceOrientationMask { .landscape }
+    override var supportedInterfaceOrientations: UIInterfaceOrientationMask { .portrait }
     override var prefersStatusBarHidden: Bool { true }
     override var prefersHomeIndicatorAutoHidden: Bool { true }
 }

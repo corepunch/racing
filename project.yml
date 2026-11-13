@@ -6,8 +6,8 @@ options:
   defaultConfig: Debug
 
 settings:
-  SUPPORTED_INTERFACE_ORIENTATIONS: UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight
-  SUPPORTED_INTERFACE_ORIENTATIONS_IPAD: UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight
+  SUPPORTED_INTERFACE_ORIENTATIONS: UIInterfaceOrientationPortrait
+  SUPPORTED_INTERFACE_ORIENTATIONS_IPAD: UIInterfaceOrientationPortrait
 
 targets:
   Racing:

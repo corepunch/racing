@@ -84,11 +84,12 @@ enum TrackLibrary {
     static let alpinePass = TrackDefinition(
         name: "Alpine Pass",
         controlPoints: [
-            SIMD3(   0, 10, -250), SIMD3( 150, 14, -275), SIMD3( 290, 22, -230),
-            SIMD3( 380, 30, -110), SIMD3( 380, 34,   40), SIMD3( 290, 30,  160),
-            SIMD3( 150, 22,  235), SIMD3(   0, 17,  250), SIMD3(-140, 12,  215),
-            SIMD3(-260,  9,  150), SIMD3(-330,  7,   20), SIMD3(-300,  8, -120),
-            SIMD3(-160,  9, -225),
+            SIMD3(   0, 10, -300), SIMD3( 170, 14, -300), SIMD3( 290, 21, -240),
+            SIMD3( 240, 25, -145), SIMD3( 350, 30,  -60), SIMD3( 380, 34,   60),
+            SIMD3( 290, 30,  145), SIMD3( 220, 27,  110), SIMD3( 155, 22,  205),
+            SIMD3(  30, 17,  285), SIMD3(-100, 12,  260), SIMD3(-150, 10,  165),
+            SIMD3(-260,  9,  180), SIMD3(-350,  7,   90), SIMD3(-300,  8,    0),
+            SIMD3(-365,  8, -110), SIMD3(-300,  9, -230), SIMD3(-160,  9, -285),
         ],
         banking: 1,
         surfaces: [SurfaceRange(start: 0.44, end: 0.54, surface: .gravel)],

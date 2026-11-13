@@ -30,7 +30,7 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
     var steerInput: Float    = 0
 
     // --- Demo auto-drive ---
-    var autoDrive = false
+    var autoDrive = false { didSet { physics.setDemo(autoDrive) } }
     private var autoDriveProgress: Float = 0
     private var autoDriveSpeed: Float = 30
 
@@ -101,10 +101,8 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
         // Car
         carNode = CarNode(style: carStyle)
         let startSample = track.samples[0]
-        physics.reset(to: startSample)
-        carNode.simdPosition = physics.position
-        physics.node = carNode
         scene.rootNode.addChildNode(carNode)
+        physics.install(on: carNode, in: scene.physicsWorld, at: startSample)
 
         // Camera
         setupCamera()
@@ -212,6 +210,8 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
             return
         }
 
+        physics.syncFromPhysics(dt: dt)
+
         // Feed inputs
         physics.throttle = throttleInput
         physics.brake    = brakeInput
@@ -230,12 +230,6 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
 
         // Step physics
         physics.update(dt: dt, world: scene.physicsWorld)
-        // Align to the actual surface under the car, including off-road terrain.
-        carNode.simdOrientation = simd_quatf(from: SIMD3<Float>(0, 1, 0), to: physics.groundNormal)
-            * carNode.simdOrientation
-
-        // Wheel animation
-        carNode?.animateWheels(speed: physics.speed, steer: steerInput, dt: dt)
 
         // Spring-arm camera
         updateCamera(dt: dt)
@@ -310,7 +304,7 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
         let fwd = SIMD3<Float>(sin(yaw), 0, -cos(yaw))
 
         // NFS3-style chase cam: low and tight behind the car, low enough for tunnels.
-        let behind: Float = 6.8
+        let behind: Float = 10.2
         let above:  Float = 2.1
         var targetPos = physics.position - fwd * behind + SIMD3<Float>(0, above, 0)
         let ground = scene.physicsWorld.rayTestWithSegment(

@@ -2,70 +2,87 @@ import AppKit
 import SceneKit
 import simd
 
-// Minimal track types let this exercise the production controller on macOS.
-enum SurfaceType {
-    case tarmac
-    var corneringStiffness: Float { 15_000 }
-    var driftThreshold: Float { 0.3 }
-}
+// Minimal track and car types exercise the production vehicle on a flat surface.
+enum SurfaceType { case tarmac, gravel }
 struct PathSample {
     var position: SIMD3<Float>
     var forward: SIMD3<Float>
+    var up: SIMD3<Float>
+}
+final class CarNode: SCNNode {
+    func preparePhysicsWheels() -> [SCNNode] {
+        [SIMD3<Float>(-0.77, 0, -1.2), SIMD3<Float>(0.77, 0, -1.2),
+         SIMD3<Float>(-0.77, 0, 0.92), SIMD3<Float>(0.77, 0, 0.92)].map { position in
+            let wheel = SCNNode()
+            wheel.simdPosition = position
+            addChildNode(wheel)
+            return wheel
+        }
+    }
 }
 
-@main struct CollisionCheck {
+@main struct VehicleCheck {
     static func main() {
         let app = NSApplication.shared
         let scene = SCNScene()
-        let floor = SCNNode(geometry: SCNBox(width: 100, height: 1, length: 100, chamferRadius: 0))
+        let floor = SCNNode(geometry: SCNBox(width: 1000, height: 1, length: 1000, chamferRadius: 0))
         floor.position.y = -0.5
-        PhysicsCategory.addStaticMesh(to: floor, category: PhysicsCategory.terrain)
+        floor.physicsBody = SCNPhysicsBody(type: .static, shape: nil)
+        floor.physicsBody?.categoryBitMask = PhysicsCategory.track
+        floor.physicsBody?.collisionBitMask = PhysicsCategory.car
         scene.rootNode.addChildNode(floor)
-
-        let wall = SCNNode(geometry: SCNBox(width: 10, height: 4, length: 0.2, chamferRadius: 0))
-        wall.position = SCNVector3(0, 1, -8)
-        wall.opacity = 0 // Tree trunk collision geometry is transparent too.
-        PhysicsCategory.addStaticMesh(to: wall, category: PhysicsCategory.obstacle)
-        scene.rootNode.addChildNode(wall)
-
-        let ramp = SCNNode(geometry: SCNBox(width: 8, height: 0.5, length: 8, chamferRadius: 0))
-        ramp.position = SCNVector3(20, 1.5, 0)
-        ramp.eulerAngles.z = 0.2
-        PhysicsCategory.addStaticMesh(to: ramp, category: PhysicsCategory.track)
-        scene.rootNode.addChildNode(ramp)
-
-        let camera = SCNNode()
-        camera.camera = SCNCamera()
-        camera.position.z = 20
-        scene.rootNode.addChildNode(camera)
+        let car = CarNode()
+        scene.rootNode.addChildNode(car)
+        let controller = CarController()
+        controller.install(on: car, in: scene.physicsWorld,
+                           at: PathSample(position: .zero, forward: SIMD3(0, 0, -1), up: SIMD3(0, 1, 0)))
         let view = SCNView(frame: NSRect(x: 0, y: 0, width: 200, height: 200))
         view.scene = scene
-        view.pointOfView = camera
         view.isPlaying = true
         let window = NSWindow(contentRect: view.frame, styleMask: [.titled], backing: .buffered, defer: false)
         window.contentView = view
         window.makeKeyAndOrderFront(nil)
 
-        // SceneKit registers static bodies as its renderer starts.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-            let car = CarController()
-            car.position = SIMD3(0, 3, 0)
-            for _ in 0..<180 { car.update(dt: 1 / 60, world: scene.physicsWorld) }
-            let landed = car.grounded && abs(car.position.y - 0.4) < 0.1
-            print("Ground contact: \(landed ? "pass" : "FAIL")")
-
-            car.vel = SIMD2(0, -60)
-            for _ in 0..<30 { car.update(dt: 1 / 60, world: scene.physicsWorld) }
-            let stopped = car.position.z > -7 && car.speed < 10
-            print("High-speed transparent obstacle: \(stopped ? "pass" : "FAIL")")
-
-            let hillCar = CarController()
-            hillCar.position = SIMD3(20, 2.2, 0)
-            for _ in 0..<10 { hillCar.update(dt: 1 / 60, world: scene.physicsWorld) }
-            let slope = hillCar.grounded && hillCar.groundNormal.x < -0.1 && hillCar.vel.x < 0
-            print("Slope normal and downhill gravity: \(slope ? "pass" : "FAIL")")
-            fflush(stdout)
-            exit(landed && stopped && slope ? 0 : 1)
+        var tick = 0
+        var movingSpeed: Float = 0
+        var startSteerX: Float = 0
+        var minBrakingSpeed: Float = .greatestFiniteMagnitude
+        var reverseStart = SIMD3<Float>.zero
+        var reverseEnd = SIMD3<Float>.zero
+        var driveForward = SIMD3<Float>.zero
+        Timer.scheduledTimer(withTimeInterval: 1.0 / 60, repeats: true) { timer in
+            controller.syncFromPhysics(dt: 1 / 60)
+            controller.throttle = tick < 300 || tick >= 480 ? 1 : 0
+            controller.steer = (180..<240).contains(tick) ? 0.5 : 0
+            controller.brake = (300..<480).contains(tick) ? 1 : 0
+            controller.update(dt: 1 / 60, world: scene.physicsWorld)
+            if tick == 180 { startSteerX = controller.position.x }
+            if tick == 300 { movingSpeed = controller.speed }
+            if (300..<390).contains(tick) { minBrakingSpeed = min(minBrakingSpeed, controller.speed) }
+            if tick == 390 {
+                reverseStart = controller.position
+                driveForward = SIMD3(sin(controller.heading), 0, -cos(controller.heading))
+            }
+            if tick == 480 { reverseEnd = controller.position }
+            if tick == 660 {
+                let wheelHeights = car.childNodes.map { Float($0.presentation.worldPosition.y) }
+                let grounded = wheelHeights.count == 4 && wheelHeights.allSatisfy { (0.25...0.65).contains($0) }
+                let forward = controller.position.z < -5 && movingSpeed > 3
+                let steering = controller.position.x > startSteerX + 1
+                let braking = minBrakingSpeed < movingSpeed * 0.3
+                let reverse = simd_dot(reverseEnd - reverseStart, driveForward) < -1
+                let forwardAgain = simd_dot(controller.position - reverseEnd, driveForward) > 1
+                print("Four wheels grounded: \(grounded ? "pass" : "FAIL")")
+                print("Forward acceleration: \(forward ? "pass" : "FAIL")")
+                print("Right steering: \(steering ? "pass" : "FAIL")")
+                print("Braking: \(braking ? "pass" : "FAIL")")
+                print("Automatic reverse: \(reverse ? "pass" : "FAIL")")
+                print("Forward after release: \(forwardAgain ? "pass" : "FAIL")")
+                fflush(stdout)
+                timer.invalidate()
+                exit(grounded && forward && steering && braking && reverse && forwardAgain ? 0 : 1)
+            }
+            tick += 1
         }
         app.run()
     }
