@@ -88,6 +88,7 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
     // --- Inputs (set by GameViewController) ---
     var steerInput: Float = 0
     var brakeInput: Float = 0
+    var throttleInput: Float = 1
 
     /// Demo for the track recorder: the player's car glides round the lap, no race.
     var autoDrive = false {
@@ -329,12 +330,12 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
         for (i, car) in cars.enumerated() {
             let human = i == 0 && debugDriver != .rival && !playerFinished
             if human {
-                var input = CarInput(steer: steerInput, brake: brakeInput)
+                var input = CarInput(steer: steerInput, brake: brakeInput, throttle: throttleInput)
                 if debugDriver == .handsOff { input = CarInput() }
                 if debugDriver == .casual {
                     steerHistory.append(RivalDriver.input(for: car, track: track).steer)
                     if steerHistory.count > 15 { steerHistory.removeFirst() }
-                    input = CarInput(steer: steerHistory[0], brake: 0)
+                    input = CarInput(steer: steerHistory[0], brake: 0, throttle: 1)
                 }
                 // The assist also lifts and brakes for corners that are too tight for this speed.
                 // It leaves the steering alone.

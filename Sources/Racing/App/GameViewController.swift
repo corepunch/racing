@@ -127,6 +127,7 @@ final class GameViewController: UIViewController {
         guard let gs = gameScene, !paused else { return }
         gs.steerInput = controlsView.steer
         gs.brakeInput = controlsView.brake
+        gs.throttleInput = controlsView.throttle
         hud.update(gs.hud)
         for event in gs.drainEvents() { handle(event) }
     }
@@ -236,6 +237,7 @@ final class GameViewController: UIViewController {
         if value { controlsView.reset() }
         gameScene?.steerInput = 0
         gameScene?.brakeInput = 0
+        gameScene?.throttleInput = 1
         gameScene?.setActive(!value)
         scnView?.isPlaying = !value
     }

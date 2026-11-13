@@ -300,7 +300,7 @@ final class MenuViewController: UIViewController {
         let design = cars[carIndex]
         carNode?.removeFromParentNode()
         let node = CarMesh.build(design).node
-        CarMesh.setThrust(0.3, on: node)
+        CarMesh.setThrust(0.1, on: node)
         node.eulerAngles = SCNVector3(0, 0.6, 0)
         let rest = SCNVector3(0, CarMesh.axleHeight, 0)
         node.position = rest

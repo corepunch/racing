@@ -239,6 +239,9 @@ enum CarMesh {
         plume.blendMode = .add
         plume.writesToDepthBuffer = false
         plume.isDoubleSided = true
+        let sparks = SCNNode()
+        sparks.name = "embers"
+        sparks.simdPosition = lower
         for e in exhausts {
             let cone = SCNCone(topRadius: 0, bottomRadius: CGFloat(r * 0.72), height: 1)
             cone.radialSegmentCount = 8
@@ -250,7 +253,14 @@ enum CarMesh {
             flame.simdPosition = e
             flame.castsShadow = false
             flames.addChildNode(flame)
+
+            // Embers shed from the exhaust; they stay behind in the world as the car pulls away.
+            let embers = SCNNode()
+            embers.simdPosition = e + SIMD3(0, 0, 0.1)
+            embers.addParticleSystem(emberSystem(color: color(design.glow), size: r))
+            sparks.addChildNode(embers)
         }
+        chassis.addChildNode(sparks)
         chassis.addChildNode(flames)
 
         let wheels = places.map { p -> SCNNode in
@@ -297,11 +307,58 @@ enum CarMesh {
         return carrier
     }
 
-    /// Stretches the afterburner plumes: 0 idle, 1 flat out, above 1 on boost.
+    private static let emberImage: UIImage = {
+        UIGraphicsImageRenderer(size: CGSize(width: 16, height: 16)).image { ctx in
+            let colors = [UIColor.white.cgColor, UIColor(white: 1, alpha: 0).cgColor] as CFArray
+            let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: colors, locations: [0, 1])!
+            ctx.cgContext.drawRadialGradient(gradient, startCenter: CGPoint(x: 8, y: 8), startRadius: 0,
+                                             endCenter: CGPoint(x: 8, y: 8), endRadius: 8, options: [])
+        }
+    }()
+
+    private static func emberSystem(color: UIColor, size: Float) -> SCNParticleSystem {
+        let system = SCNParticleSystem()
+        system.particleImage = emberImage
+        system.birthRate = 0
+        system.loops = true
+        system.particleLifeSpan = 0.26
+        system.particleLifeSpanVariation = 0.12
+        system.emittingDirection = SCNVector3(0, 0, 1)
+        system.spreadingAngle = 14
+        system.particleVelocity = 5
+        system.particleVelocityVariation = 3
+        system.particleSize = CGFloat(size * 0.9)
+        system.particleSizeVariation = CGFloat(size * 0.3)
+        system.particleColor = color
+        system.blendMode = .additive
+        system.isLightingEnabled = false
+        system.isAffectedByGravity = false
+        system.acceleration = SCNVector3(0, 1.5, 0)
+        let fade = CABasicAnimation()
+        fade.fromValue = 0.9
+        fade.toValue = 0
+        let shrink = CABasicAnimation()
+        shrink.fromValue = size * 0.9
+        shrink.toValue = size * 0.15
+        system.propertyControllers = [
+            .opacity: SCNParticlePropertyController(animation: fade),
+            .size: SCNParticlePropertyController(animation: shrink),
+        ]
+        return system
+    }
+
+    /// Sets the afterburners: 0 idle, 1 flat out, above 1 on boost. The plumes stretch
+    /// and the embers thicken with it.
     static func setThrust(_ amount: Float, on car: SCNNode) {
-        guard let flames = car.childNode(withName: "flames", recursively: false) else { return }
-        let length = 0.15 + 1.0 * amount
-        for flame in flames.childNodes { flame.simdScale = SIMD3(1, length, 1) }
+        if let flames = car.childNode(withName: "flames", recursively: false) {
+            let length = 0.12 + 1.15 * amount
+            let girth = 0.75 + 0.3 * min(amount, 1.6)
+            for flame in flames.childNodes { flame.simdScale = SIMD3(girth, length, girth) }
+        }
+        if let embers = car.childNode(withName: "embers", recursively: false) {
+            let rate = CGFloat(max(0, amount - 0.12) * 200)
+            for node in embers.childNodes { node.particleSystems?.first?.birthRate = rate }
+        }
     }
 
     private static func color(_ c: SIMD3<Float>) -> UIColor {

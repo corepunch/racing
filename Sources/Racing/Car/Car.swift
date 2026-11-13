@@ -78,6 +78,7 @@ final class Car {
     private var sampleIndex = 0
     private var reversing = false
     private var smoothSteer: Float = 0
+    private var exhaust: Float = 0
     private var stuckTime: Float = 0
     private var flippedTime: Float = 0
     private var wrongWayTime: Float = 0
@@ -213,17 +214,23 @@ final class Car {
         let boosting = boost > 0
         let top = spec.topSpeed * pace * (boosting ? 1.22 : 1)
 
-        // Holding brake switches to reverse once the car is nearly stopped.
-        // Releasing it brakes reverse motion before forward drive resumes.
-        let wantsReverse = input.brake > 0.1
-        if wantsReverse && !reversing && speed < 0.5 { reversing = true }
-        if !wantsReverse && reversing && speed < 0.5 { reversing = false }
-        let changingDirection = wantsReverse != reversing
+        // Braking is progressive: a light brake just slows the car, a hard one (the full pull)
+        // bites twice as hard and, held at a standstill, selects reverse. Releasing it brakes
+        // the reverse motion before forward drive resumes.
+        let hard = input.brake > 0.9
+        if hard && !reversing && speed < 0.5 { reversing = true }
+        if !hard && reversing && speed < 0.5 { reversing = false }
         // Thrust fades towards top speed; reverse is deliberately weak.
         let fade = CGFloat(max(0, 1 - pow(speed / top, 2)))
-        var drive: CGFloat = changingDirection ? 0
-            : (reversing ? CGFloat(input.brake) * 0.25 : -CGFloat(input.throttle) * fade * (boosting ? 1.9 : 1))
-        var braking: CGFloat = changingDirection ? (wantsReverse ? CGFloat(input.brake) : 1) : 0
+        var drive: CGFloat
+        var braking: CGFloat
+        if reversing {
+            drive = hard ? CGFloat(input.brake) * 0.25 : 0
+            braking = hard ? 0 : 1
+        } else {
+            drive = hard ? 0 : -CGFloat(input.throttle) * fade * (boosting ? 1.9 : 1)
+            braking = hard ? 2 : CGFloat(input.brake)
+        }
         if hold { drive = 0; braking = 1 }
 
         // Steering lock shrinks with speed so the car stays controllable flat out.
@@ -268,7 +275,10 @@ final class Car {
             vehicle.applyEngineForce(engineForce * drive / 4, forWheelAt: index)
             vehicle.applyBrakingForce(brakeForce * braking * (front ? 0.3 : 0.2), forWheelAt: index)
         }
-        CarMesh.setThrust(boosting ? 1.8 : (hold ? 0.1 : 0.2 + 0.8 * Float(-drive)), on: node)
+        // Exhaust grows with speed, not with the throttle, so it swells and dies away gradually.
+        let exhaustTarget = min(1, speed / spec.topSpeed) + (boosting ? 0.6 : 0)
+        exhaust += (exhaustTarget - exhaust) * min(1, 2.5 * dt)
+        CarMesh.setThrust(exhaust, on: node)
     }
 
     /// Chassis stability, part of how the car handles rather than an assist: damps pitch
@@ -365,7 +375,7 @@ final class Car {
     /// against something or ended up pointing the wrong way. Returns true if it did.
     private func recoverIfNeeded(dt: Float, input: CarInput, frame: PathSample, track: TrackPath) -> Bool {
         flippedTime = upright < 0.3 ? flippedTime + dt : 0
-        stuckTime = speed < 1.5 && input.brake < 0.1 ? stuckTime + dt : 0
+        stuckTime = speed < 1.5 && input.brake < 0.05 && input.throttle > 0.5 ? stuckTime + dt : 0
         wrongWayTime = abs(heading) > 2 ? wrongWayTime + dt : 0
         let fallen = worldPosition.y < frame.position.y - 25
         guard fallen || flippedTime > 1 || stuckTime > 1.5 || wrongWayTime > 2 else { return false }
