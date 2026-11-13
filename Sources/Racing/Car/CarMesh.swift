@@ -7,9 +7,6 @@ struct CarModel {
     let node: SCNNode
     let wheels: [SCNNode]
     let radii: [Float]
-    /// Exhaust mouths in the chassis node's space, and their radius.
-    let exhausts: [SIMD3<Float>]
-    let exhaustRadius: Float
 }
 
 /// Builds a faceted open-wheel racer from a `CarDesign`. Nose points along −Z. The node's
@@ -263,8 +260,7 @@ enum CarMesh {
             chassis.addChildNode(wheel)
             return wheel
         }
-        return CarModel(node: chassis, wheels: wheels, radii: places.map(\.r),
-                        exhausts: exhausts.map { $0 + lower }, exhaustRadius: r)
+        return CarModel(node: chassis, wheels: wheels, radii: places.map(\.r))
     }
 
     /// A fat slick on a bright rim. The carrier node is what the physics turns; a dark
@@ -340,72 +336,5 @@ enum CarMesh {
             pbr(SIMD3(0.03, 0.05, 0.08), metal: 1, rough: 0.08),
             glow,
         ]
-    }
-}
-
-/// Light ribbons streaming from a car's exhausts. Each frame the exhaust positions are
-/// recorded and the last few are joined into a flat strip that narrows and fades towards
-/// its tail. The strip lives in world space, so it bends through corners behind the car.
-final class ExhaustTrail {
-    let node = SCNNode()
-    private let color: SIMD3<Float>
-    private let material = SCNMaterial()
-    /// Newest first: for each recorded frame, every exhaust position and the car's right vector.
-    private var history: [(points: [SIMD3<Float>], right: SIMD3<Float>, strength: Float)] = []
-    private static let length = 16
-
-    init(color: SIMD3<Float>) {
-        self.color = color
-        material.lightingModel = .constant
-        material.diffuse.contents = UIColor.white
-        material.blendMode = .add
-        material.isDoubleSided = true
-        material.writesToDepthBuffer = false
-        node.castsShadow = false
-        node.renderingOrder = 10
-    }
-
-    func reset() {
-        history.removeAll()
-        node.geometry = nil
-    }
-
-    /// Records this frame and rebuilds the strip. `strength` (0...1) is how hot the exhaust is.
-    func update(points: [SIMD3<Float>], right: SIMD3<Float>, width: Float, strength: Float) {
-        history.insert((points, right, strength), at: 0)
-        if history.count > Self.length { history.removeLast() }
-        guard history.count > 1, let exhausts = history.first?.points.count, exhausts > 0 else {
-            node.geometry = nil
-            return
-        }
-        var vertices: [SCNVector3] = []
-        var colors: [SIMD3<Float>] = []
-        var indices: [UInt32] = []
-        for e in 0..<exhausts {
-            let base = UInt32(vertices.count)
-            for (i, frame) in history.enumerated() {
-                let t = Float(i) / Float(Self.length - 1)
-                let half = width * (1 - t) / 2
-                let fade = (1 - t) * (1 - t) * (1 - t) * frame.strength * 0.85
-                let p = frame.points[e]
-                for side: Float in [-1, 1] {
-                    let v = p + frame.right * (half * side)
-                    vertices.append(SCNVector3(v.x, v.y, v.z))
-                    colors.append(color * fade)
-                }
-                if i > 0 {
-                    let a = base + UInt32(i - 1) * 2
-                    indices += [a, a + 1, a + 2, a + 1, a + 3, a + 2]
-                }
-            }
-        }
-        let colorData = colors.withUnsafeBufferPointer { Data(buffer: $0) }
-        let colorSource = SCNGeometrySource(
-            data: colorData, semantic: .color, vectorCount: colors.count, usesFloatComponents: true,
-            componentsPerVector: 3, bytesPerComponent: 4, dataOffset: 0, dataStride: MemoryLayout<SIMD3<Float>>.stride)
-        let geometry = SCNGeometry(sources: [SCNGeometrySource(vertices: vertices), colorSource],
-                                   elements: [SCNGeometryElement(indices: indices, primitiveType: .triangles)])
-        geometry.firstMaterial = material
-        node.geometry = geometry
     }
 }

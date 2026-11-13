@@ -185,7 +185,6 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
         for car in cars {
             scene.rootNode.addChildNode(car.node)
             car.install(in: scene.physicsWorld)
-            scene.rootNode.addChildNode(car.trail.node)
         }
 
         setupCamera()
