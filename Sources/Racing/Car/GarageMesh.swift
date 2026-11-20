@@ -15,11 +15,12 @@ enum GarageMesh {
         ground.position.y = -CarMesh.axleHeight
         car.addChildNode(ground)
 
-        let frame = makePart(build.part(at: .frame) ?? .sprint, size: size, paint: build.paint(for: .frame))
+        let chassis = build.part(at: .frame) ?? .sprint
+        let frame = makePart(chassis, size: size, paint: build.paint(for: .frame), on: chassis)
         ground.addChildNode(frame)
         for slot in [CarSlot.front, .rear, .motor] {
             guard let part = build.part(at: slot) else { continue }
-            let node = makePart(part, size: size, paint: build.paint(for: slot))
+            let node = makePart(part, size: size, paint: build.paint(for: slot), on: chassis)
             switch slot {
             case .front: node.position.z = -size.end
             case .rear: node.position.z = size.end
@@ -33,7 +34,7 @@ enum GarageMesh {
                 mount.simdPosition = addonMount(for: part)
                 node.addChildNode(mount)
                 if let addon = build.part(at: socket) {
-                    mount.addChildNode(makePart(addon, size: size, paint: build.paint(for: socket)))
+                    mount.addChildNode(makePart(addon, size: size, paint: build.paint(for: socket), on: chassis))
                 }
             }
         }
@@ -64,11 +65,21 @@ enum GarageMesh {
         if part.slot == .wheels {
             return wheel(part, radius: size.rearRadius, width: size.tyreWidth, paint: part.slot.factoryPaint)
         }
-        return makePart(part, size: size, paint: part.slot.factoryPaint)
+        return makePart(part, size: size, paint: part.slot.factoryPaint, on: build.part(at: .frame) ?? .sprint)
     }
 
-    private static func makePart(_ part: CarPart, size: GarageDimensions, paint: GaragePaint) -> SCNNode {
+    /// `chassis` is the frame the part goes on: it sets the livery the bodywork shares.
+    private static func makePart(_ part: CarPart, size: GarageDimensions, paint: GaragePaint,
+                                 on chassis: CarPart) -> SCNNode {
         var shell = Shell()
+        // The nose and tail hang off the ends of the frame; their graphics carry on from it.
+        var livery: Int?
+        switch part.slot {
+        case .frame: livery = liveryStyle(chassis)
+        case .front: livery = liveryStyle(chassis); shell.origin.z = -size.end
+        case .rear: livery = liveryStyle(chassis); shell.origin.z = size.end
+        default: break
+        }
         switch part.slot {
         case .frame: frame(part, size: size, shell: &shell)
         case .front: front(part, shell: &shell)
@@ -78,16 +89,29 @@ enum GarageMesh {
         case .wing: wing(part, shell: &shell)
         case .wheels: preconditionFailure("Wheel parts use their own rotating carrier")
         }
-        return node(named: part.rawValue, shell: shell, paint: paint)
+        return node(named: part.rawValue, shell: shell, paint: paint, livery: livery)
     }
 
-    private static func node(named name: String, shell: Shell, paint: GaragePaint) -> SCNNode {
+    private static func liveryStyle(_ frame: CarPart) -> Int {
+        switch frame {
+        case .vector: return 1
+        case .atlas: return 2
+        default: return 0
+        }
+    }
+
+    private static func node(named name: String, shell: Shell, paint: GaragePaint, detailed: Bool = true,
+                             livery: Int? = nil) -> SCNNode {
         let color = paint.rgb
+        // Graphics have to read on any paint: a deep shade of it when it is bright, white when it is dark.
+        let bright = simd_dot(color, SIMD3<Float>(0.299, 0.587, 0.114)) > 0.45
+        let graphics = bright ? color * 0.16 + SIMD3<Float>(0.02, 0.03, 0.05) : SIMD3<Float>(0.93, 0.95, 0.98)
         let trim = color * 0.67 + SIMD3<Float>(0.22, 0.25, 0.28)
         let light: SIMD3<Float> = name == CarPart.cutTail.rawValue || name == CarPart.flightDeck.rawValue
             || name == CarPart.twinTail.rawValue ? SIMD3(1, 0.13, 0.37) : SIMD3(0.27, 0.87, 1)
-        let materials = CarMesh.materials(paint: color, accent: trim, light: light)
-        let result = SCNNode(geometry: shell.mesh.geometry(materials: materials))
+        let materials = CarMesh.materials(paint: color, accent: trim, light: light, detailed: detailed,
+                                          livery: livery.map { (graphics, $0) })
+        let result = SCNNode(geometry: shell.geometry(materials: materials))
         result.name = name
         return result
     }
@@ -354,8 +378,17 @@ enum GarageMesh {
                            thickness: SIMD3(0.011, 0, 0))
             }
         }
-        let node = node(named: part.rawValue, shell: shell, paint: paint)
+        // Panel seams belong on bodywork, not across a rim.
+        let node = node(named: part.rawValue, shell: shell, paint: paint, detailed: false)
         var tyre = Shell()
+        // Once round the wheel and once across the tread. A face on the join is unwrapped
+        // towards its own centre, so the tread carries on over it.
+        tyre.mapping = { p, _, centre in
+            let middle = atan2(centre.z, centre.y)
+            var angle = atan2(p.z, p.y)
+            if angle - middle > .pi { angle -= 2 * .pi } else if middle - angle > .pi { angle += 2 * .pi }
+            return SIMD2(angle / (2 * .pi), p.x / width + 0.5)
+        }
         // The closed section follows the tire sidewalls without covering the colored rims.
         for side: Float in [-1, 1] {
             let edge = ring(side * width * 0.49, radius * 0.74)
@@ -364,16 +397,15 @@ enum GarageMesh {
             let crown = ring(0, radius)
             for i in 0..<segments {
                 let j = (i + 1) % segments
-                for (inner, outer) in [(edge, sidewall), (sidewall, shoulder), (shoulder, crown)] {
-                    tyre.quad(.metal, inner[i], inner[j], outer[j], outer[i], from: .zero)
+                for (slot, inner, outer) in [(Slot.metal, edge, sidewall), (.metal, sidewall, shoulder), (.paint, shoulder, crown)] {
+                    tyre.quad(slot, inner[i], inner[j], outer[j], outer[i], from: .zero)
                 }
             }
         }
-        let rubber = SCNMaterial()
-        rubber.lightingModel = .physicallyBased
-        rubber.diffuse.contents = UIColor(white: 0.06, alpha: 1)
-        rubber.roughness.contents = 0.90
-        node.addChildNode(SCNNode(geometry: tyre.mesh.geometry(materials: Array(repeating: rubber, count: 5))))
+        // Wide Track carries its tread as blocks; the others have it cut into the rubber.
+        let rubber = CarMesh.rubber()
+        let tread = part == .wideTrack ? rubber : CarMesh.rubber(treadAround: radius)
+        node.addChildNode(SCNNode(geometry: tyre.geometry(materials: [tread, rubber, rubber, rubber, rubber])))
         if part == .wideTrack {
             for i in 0..<segments {
                 let angle = Float(i) * 2 * .pi / Float(segments)

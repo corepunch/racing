@@ -72,6 +72,24 @@ struct MeshBuilder {
         if top { flatQuad(topSlot ?? slot, t[3], t[2], t[1], t[0], color: color) }
     }
 
+    /// Blends the normals of vertices that share a position wherever their faces meet at less
+    /// than the crease angle, so gentle bends shade as curves and real edges stay sharp.
+    mutating func smoothNormals(creaseCosine: Float = 0.8) {
+        var groups: [SIMD3<Int32>: [Int]] = [:]
+        for (i, p) in positions.enumerated() {
+            let q = (p * 2000).rounded(.toNearestOrAwayFromZero)
+            groups[SIMD3(Int32(q.x), Int32(q.y), Int32(q.z)), default: []].append(i)
+        }
+        let flat = normals
+        for group in groups.values where group.count > 1 {
+            for i in group {
+                var sum = SIMD3<Float>.zero
+                for j in group where simd_dot(flat[i], flat[j]) >= creaseCosine { sum += flat[j] }
+                normals[i] = simd_normalize(sum)
+            }
+        }
+    }
+
     /// Position-only mesh of every slot, for static collision shapes.
     func collisionGeometry() -> SCNGeometry {
         let all = indices.flatMap { $0 }

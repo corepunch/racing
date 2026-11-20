@@ -23,6 +23,18 @@ enum CarMesh {
     /// Flat-shaded faces that always wind outward from a reference point.
     struct Shell {
         var mesh = MeshBuilder(materialCount: Slot.allCases.count)
+        /// Where this shell sits on the car, so textures run on from one part to the next.
+        var origin = SIMD3<Float>.zero
+        /// Replaces the bodywork projection: texture coordinates for a point, given its face's
+        /// normal and centre.
+        var mapping: ((_ p: SIMD3<Float>, _ n: SIMD3<Float>, _ centre: SIMD3<Float>) -> SIMD2<Float>)?
+
+        /// The finished surface: gentle bends shade as curves, edges sharper than 37° stay crisp.
+        func geometry(materials: [SCNMaterial]) -> SCNGeometry {
+            var smooth = mesh
+            smooth.smoothNormals()
+            return smooth.geometry(materials: materials)
+        }
 
         mutating func tri(_ slot: Slot, _ a: SIMD3<Float>, _ b: SIMD3<Float>, _ c: SIMD3<Float>, from o: SIMD3<Float>) {
             var n = simd_cross(b - a, c - a)
@@ -31,8 +43,20 @@ enum CarMesh {
             n /= length
             let outward = simd_dot(n, (a + b + c) / 3 - o) >= 0
             if !outward { n = -n }
-            let i0 = mesh.vertex(a, n), i1 = mesh.vertex(b, n), i2 = mesh.vertex(c, n)
+            let centre = (a + b + c) / 3
+            func map(_ p: SIMD3<Float>) -> SIMD2<Float> { mapping?(p, n, centre) ?? uv(p, n) }
+            let i0 = mesh.vertex(a, n, map(a)), i1 = mesh.vertex(b, n, map(b)), i2 = mesh.vertex(c, n, map(c))
             if outward { mesh.triangle(slot.rawValue, i0, i1, i2) } else { mesh.triangle(slot.rawValue, i0, i2, i1) }
+        }
+
+        /// Box projection in metres onto the layout the car textures share: decks by distance
+        /// from the centre line, flanks by height, both by position along the car, so a seam
+        /// across the deck carries on down the flank. A shoulder counts as flank once it is
+        /// steeper than 30 degrees, because that is where a side graphic belongs.
+        private func uv(_ p: SIMD3<Float>, _ n: SIMD3<Float>) -> SIMD2<Float> {
+            let q = p + origin, m = abs(n)
+            if m.x > 0.5 && m.x >= m.z { return SIMD2(ProceduralTextures.carFlank + q.y, q.z) }
+            return m.z > m.y ? SIMD2(q.x, q.y) : SIMD2(q.x, q.z)
         }
 
         mutating func quad(_ slot: Slot, _ a: SIMD3<Float>, _ b: SIMD3<Float>, _ c: SIMD3<Float>, _ d: SIMD3<Float>,
@@ -225,7 +249,7 @@ enum CarMesh {
         let chassis = SCNNode()
         // Everything above was modelled with the road at y = 0.
         let lower = SIMD3<Float>(0, -axleHeight, 0)
-        let hull = SCNNode(geometry: shell.mesh.geometry(materials: mats))
+        let hull = SCNNode(geometry: shell.geometry(materials: mats))
         hull.name = "hull"
         hull.simdPosition = lower
         chassis.addChildNode(hull)
@@ -235,8 +259,10 @@ enum CarMesh {
         flames.simdPosition = lower
         chassis.addChildNode(flames)
 
+        let rim = materials(paint: design.primary, accent: design.accent, light: design.glow,
+                            detailed: false)[Slot.accent.rawValue]
         let wheels = places.map { p -> SCNNode in
-            let wheel = makeWheel(radius: p.r, width: design.tyreWidth, rim: mats[Slot.accent.rawValue])
+            let wheel = makeWheel(radius: p.r, width: design.tyreWidth, rim: rim)
             wheel.simdPosition = SIMD3(p.x, p.r, p.z) + lower
             chassis.addChildNode(wheel)
             return wheel
@@ -273,11 +299,6 @@ enum CarMesh {
     /// A fat slick on a bright rim. The carrier node is what the physics turns; a dark
     /// bar across the rim makes the spin visible.
     private static func makeWheel(radius: Float, width: Float, rim: SCNMaterial) -> SCNNode {
-        let rubber = SCNMaterial()
-        rubber.lightingModel = .physicallyBased
-        rubber.diffuse.contents = UIColor(white: 0.05, alpha: 1)
-        rubber.roughness.contents = 0.85
-        rubber.metalness.contents = 0
         let dark = SCNMaterial()
         dark.lightingModel = .physicallyBased
         dark.diffuse.contents = UIColor(white: 0.1, alpha: 1)
@@ -286,8 +307,8 @@ enum CarMesh {
 
         let carrier = SCNNode()
         let tyre = SCNCylinder(radius: CGFloat(radius), height: CGFloat(width))
-        tyre.radialSegmentCount = 18
-        tyre.materials = [rubber, rubber, rubber]
+        tyre.radialSegmentCount = 24
+        tyre.materials = [rubber(treadAround: radius), rubber(), rubber()]
         let tyreNode = SCNNode(geometry: tyre)
         tyreNode.eulerAngles = SCNVector3(0, 0, Float.pi / 2)
         carrier.addChildNode(tyreNode)
@@ -305,6 +326,21 @@ enum CarMesh {
         return carrier
     }
 
+    /// Tyre rubber: dull, never metallic. `treadAround` a wheel of that radius cuts a tread into
+    /// it, for surfaces mapped once round the wheel and once across it.
+    static func rubber(treadAround radius: Float? = nil) -> SCNMaterial {
+        let m = SCNMaterial()
+        m.lightingModel = .physicallyBased
+        m.diffuse.contents = UIColor(white: 0.075, alpha: 1)
+        m.roughness.contents = 0.82
+        m.metalness.contents = 0
+        if let radius {
+            let blocks = (2 * Float.pi * radius / 0.13).rounded()
+            ProceduralTextures.tyreTread.overlay(on: m, tile: SIMD2(1 / blocks, 1))
+        }
+        return m
+    }
+
     /// Sets the afterburners: 0 idle, 1 flat out, above 1 on boost.
     static func setThrust(_ amount: Float, on car: SCNNode) {
         if let flames = car.childNode(withName: "flames", recursively: false) {
@@ -319,21 +355,33 @@ enum CarMesh {
     }
 
     private static func materials(_ design: CarDesign) -> [SCNMaterial] {
-        materials(paint: design.primary, accent: design.accent, light: design.glow)
+        materials(paint: design.primary, accent: design.accent, light: design.glow,
+                  livery: (design.accent, Int(design.seed % UInt64(ProceduralTextures.carLiveryStyles))))
     }
 
-    static func materials(paint: SIMD3<Float>, accent: SIMD3<Float>, light: SIMD3<Float>) -> [SCNMaterial] {
-        func pbr(_ c: SIMD3<Float>, metal: CGFloat, rough: CGFloat, emit: CGFloat = 0) -> SCNMaterial {
+    /// `detailed` lays panel seams, vents and wear over the paint, and `livery` paints racing
+    /// graphics on it in a second colour. Shells carry the UVs for both; anything else (a rim
+    /// on a stock cylinder) wants the plain colours.
+    static func materials(paint: SIMD3<Float>, accent: SIMD3<Float>, light: SIMD3<Float>, detailed: Bool = true,
+                          livery: (color: SIMD3<Float>, style: Int)? = nil) -> [SCNMaterial] {
+        /// `coat` lacquers the surface: a second, mirror-sharp highlight over the paint.
+        func pbr(_ c: SIMD3<Float>, metal: CGFloat, rough: CGFloat, coat: Bool = false,
+                 detail: TextureSet? = nil) -> SCNMaterial {
             let m = SCNMaterial()
             m.lightingModel = .physicallyBased
             m.diffuse.contents = color(c)
             m.metalness.contents = metal
             m.roughness.contents = rough
-            if emit > 0 {
-                m.emission.contents = color(c)
-                m.emission.intensity = emit
+            if coat {
+                m.clearCoat.contents = 1.0
+                m.clearCoatRoughness.contents = 0.18
             }
+            if detailed { detail?.overlay(on: m, tile: ProceduralTextures.carTile) }
             return m
+        }
+        let body = pbr(paint, metal: 0.7, rough: 0.32, coat: true, detail: ProceduralTextures.carPanels)
+        if detailed, let livery {
+            body.diffuse.contents = ProceduralTextures.carLivery(paint: paint, graphics: livery.color, style: livery.style)
         }
         let glow = SCNMaterial()
         glow.lightingModel = .constant
@@ -342,9 +390,9 @@ enum CarMesh {
         glow.emission.intensity = 3
         // Bodywork only reflects light; the glow strips and plumes are the car's only emitters.
         return [
-            pbr(paint, metal: 0.55, rough: 0.32),
-            pbr(accent, metal: 0.3, rough: 0.4),
-            pbr(SIMD3(0.09, 0.1, 0.12), metal: 0.9, rough: 0.45),
+            body,
+            pbr(accent, metal: 0.5, rough: 0.4, coat: true, detail: ProceduralTextures.carPanels),
+            pbr(SIMD3(0.09, 0.1, 0.12), metal: 0.9, rough: 0.45, detail: ProceduralTextures.carMetal),
             pbr(SIMD3(0.03, 0.05, 0.08), metal: 1, rough: 0.08),
             glow,
         ]

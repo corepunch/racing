@@ -59,6 +59,24 @@ struct TextureSet {
         }
         return m
     }
+
+    /// Lays the set over a material as colourless detail: the albedo darkens the lit surface
+    /// (seams, vents, grime), roughness and relief come from the other maps, and the material
+    /// keeps its own colour or livery and its metalness.
+    func overlay(on m: SCNMaterial, tile: SIMD2<Float>) {
+        m.multiply.contents = albedo
+        m.roughness.contents = surface
+        m.roughness.textureComponents = .green
+        m.normal.contents = normal
+        let transform = SCNMatrix4MakeScale(1 / tile.x, 1 / tile.y, 1)
+        for property in [m.diffuse, m.multiply, m.roughness, m.normal] {
+            property.wrapS = .repeat
+            property.wrapT = .repeat
+            property.mipFilter = .linear
+            property.maxAnisotropy = 8
+            property.contentsTransform = transform
+        }
+    }
 }
 
 /// Antialiased coverage of a line of stencil lettering, sampled by the texture shaders.
@@ -520,6 +538,156 @@ enum ProceduralTextures {
             t.glow(theme.neonA, box(u - 0.5, v - 0.5, 0.2, 0.2, 0.01))
             return t
         }
+    }
+
+    // MARK: - Cars
+
+    // Car textures share one layout, 4 m across by 2 m along the car. Across, the texture is
+    // folded about the centre line so both halves of a car mirror: decks use the first 1.3 m
+    // (distance from the centre line) and flanks the rest, starting `carFlank` out, where the
+    // distance is height above the road.
+
+    /// Metres one copy of a car texture covers: across, then along.
+    static let carTile = SIMD2<Float>(4, 2)
+    /// Where a flank at road height sits across the texture, in metres.
+    static let carFlank: Float = 1.1
+
+    /// Metres from the centre line (0...2) and along the car (0..<2) for a texture coordinate.
+    @inline(__always) private static func carSpace(_ u: Float, _ v: Float) -> (a: Float, z: Float) {
+        (abs(fract(u + 0.5) - 0.5) * carTile.x, v * carTile.y)
+    }
+
+    /// Painted bodywork: panel seams, fasteners, louvres and hatches under light wear.
+    static let carPanels = carDetail(panels: true, rough: 0.34, seed: 0xCA7)
+    /// Bare structure (floor, arms, nozzles): brushed and scuffed, no seams.
+    static let carMetal = carDetail(panels: false, rough: 0.45, seed: 0xCA8)
+
+    /// Colourless detail for `TextureSet.overlay`: white leaves the paint alone.
+    private static func carDetail(panels: Bool, rough: Float, seed: UInt64) -> TextureSet {
+        let base = MetalBase(seed: seed)
+        let length = carTile.y
+        /// Lengthwise seams: two on the deck and a belt line low on the flank.
+        let lanes: [Float] = [0.26, 0.70, carFlank + 0.44]
+        /// Where each lane is cut across: one long panel per copy, staggered between lanes.
+        let cuts: [Float] = [0.50, 1.45, 0.95, 0.30]
+        return bake(width: 1024, height: 512, bump: 2.5) { u, v in
+            let m = base.sample(u, v)
+            var t = Texel()
+            var shade = 1 - m.wear * 0.06 + (m.tone - 1) * 0.2
+            t.rough = rough + m.wear * 0.16 + m.grain * 0.03
+            guard panels else {
+                t.albedo = SIMD3(repeating: shade - 0.04 + m.grain * 0.04)
+                t.height = m.grain * 0.08
+                return t
+            }
+
+            let (a, z) = carSpace(u, v)
+            let lane = a < lanes[0] ? 0 : a < lanes[1] ? 1 : a < lanes[2] ? 2 : 3
+            // Distance to the nearest seam along and across.
+            let along = min(abs(a - lanes[0]), abs(a - lanes[1]), abs(a - lanes[2]))
+            let across = min(abs(z - cuts[lane]), length - abs(z - cuts[lane]))
+            var seam = 1 - smoothstep(0.003, 0.008, min(along, across))
+            // A fastener just inside each panel corner.
+            let bx = along - 0.04, bz = across - 0.04
+            let bolt = 1 - smoothstep(0.007, 0.013, sqrt(bx * bx + bz * bz))
+
+            // Louvres on the deck and high on the flank, an access hatch, a filler port on the spine.
+            let slats = band(fract((z - 0.08) / 0.055) - 0.5, 0.2, 0.08)
+                * max(box(a - 0.42, z - 0.22, 0.07, 0.135, 0.004), box(a - carFlank - 0.72, z - 1.71, 0.045, 0.135, 0.004))
+            let qx = abs(a - 0.80) - 0.03, qz = abs(z - 1.50) - 0.12
+            let hatch = sqrt(max(qx, 0) * max(qx, 0) + max(qz, 0) * max(qz, 0)) + min(max(qx, qz), 0) - 0.025
+            seam = max(seam, band(hatch, 0.002, 0.004))
+            seam = max(seam, band(sqrt(a * a + (z - 1.05) * (z - 1.05)) - 0.06, 0.002, 0.004))
+
+            // Grime gathers along the seams, so each panel reads as its own piece.
+            shade -= (1 - smoothstep(0, 0.045, min(along, across))) * 0.06
+            shade *= (1 - seam * 0.62) * (1 - slats * 0.78) * (1 - bolt * 0.3)
+            t.albedo = SIMD3(repeating: shade)
+            t.rough += seam * 0.4 + slats * 0.4 - bolt * 0.1
+            t.height = -seam * 0.7 - slats * 0.9 + bolt * 0.35
+            return t
+        }
+    }
+
+    static let carLiveryStyles = 3
+    private static let liveries = NSCache<NSString, UIImage>()
+
+    /// Paint with racing graphics in a second colour: stripes down the deck and a band of
+    /// marks along each flank, pointing forward. One texture per colour pair and style.
+    static func carLivery(paint: SIMD3<Float>, graphics: SIMD3<Float>, style: Int) -> UIImage {
+        func hex(_ c: SIMD3<Float>) -> String {
+            let v = simd_clamp(c, .zero, SIMD3(repeating: 1)) * 255
+            return String(format: "%02X%02X%02X", Int(v.x), Int(v.y), Int(v.z))
+        }
+        let key = "\(hex(paint))-\(hex(graphics))-\(style)" as NSString
+        if let image = liveries.object(forKey: key) { return image }
+        let image = image(width: 1024, height: 512) { u, v in
+            let (a, z) = carSpace(u, v)
+            return simd_mix(paint, graphics, SIMD3(repeating: liveryMask(a, z, style: style)))
+        }
+        liveries.setObject(image, forKey: key)
+        return image
+    }
+
+    /// Coverage of the second colour. The flank band sits on the upper bodywork, 0.47 to 0.62 m
+    /// above the road; the nose is towards −z, so marks lean and point that way.
+    private static func liveryMask(_ a: Float, _ z: Float, style: Int) -> Float {
+        let aa: Float = 0.004
+        let dy = a - carFlank - 0.545
+        let flank = band(dy, 0.075, aa)
+        /// Stripes `pitch` apart whose position along the car is `s`; `fill` is the painted share.
+        func stripes(_ s: Float, pitch: Float, fill: Float) -> Float {
+            band(fract(s / pitch) - 0.5, fill / 2, aa / pitch)
+        }
+        /// 1 while `s` is between `from` and `to`.
+        func span(_ s: Float, _ from: Float, _ to: Float) -> Float {
+            band(s - (from + to) / 2, (to - from) / 2, aa)
+        }
+        switch style % carLiveryStyles {
+        case 0:
+            // >>>>> then a pin line to the next run; twin stripes either side of the spine.
+            let s = z - abs(dy) * 1.3
+            let run = stripes(s, pitch: 0.22, fill: 0.42) * span(s, 0.0, 1.1)
+            let pin = band(dy, 0.011, aa) * span(s, 1.16, 1.96)
+            return max(band(a - 0.11, 0.035, aa), flank * run, pin)
+        case 1:
+            // ////// hazard block; one broad stripe down the spine with a keyline.
+            let s = z + dy * 1.0
+            let block = stripes(s, pitch: 0.15, fill: 0.5) * span(s, 0.15, 1.05)
+            return max(band(a, 0.085, aa), band(a - 0.135, 0.012, aa), flank * block)
+        default:
+            // A solid band with an arrowhead cut out of it every metre; stripes beside the canopy.
+            let s = z - abs(dy) * 1.3
+            let cut = stripes(s, pitch: 1.0, fill: 0.08) + stripes(s - 0.13, pitch: 1.0, fill: 0.08)
+            return max(band(a - 0.32, 0.03, aa), flank * (1 - min(cut, 1)))
+        }
+    }
+
+    /// One block of tyre tread: u once per block round the wheel, v across the tread.
+    static let tyreTread: TextureSet = bake(width: 128, height: 256, bump: 3) { u, v in
+        let c = abs(v - 0.5)
+        // Chevron grooves, two channels round the tyre and slots in the shoulders.
+        let chevron = band(fract(u + c * 1.1) - 0.5, 0.11, 0.03) * (1 - smoothstep(0.36, 0.4, c))
+        let channel = band(c - 0.14, 0.022, 0.012)
+        let slot = band(fract(u * 2) - 0.5, 0.14, 0.04) * smoothstep(0.38, 0.42, c)
+        let groove = max(chevron, channel, slot)
+        var t = Texel()
+        t.albedo = SIMD3(repeating: 1 - groove * 0.6)
+        t.rough = 0.8 + groove * 0.15
+        t.height = -groove
+        return t
+    }
+
+    // MARK: - Studio
+
+    /// Equirectangular studio for the menus: a soft glow overhead, a blue horizon and two strip
+    /// lights, whose reflections sliding over the bodywork are what make paint read as metal.
+    static let studio: UIImage = image(width: 256, height: 128) { u, v in
+        let top = smoothstep(0.45, 0.02, v)
+        let horizon = exp(-pow((v - 0.5) * 9, 2))
+        let strip = band(v - 0.21, 0.04, 0.012) * max(band(u - 0.22, 0.13, 0.012), band(u - 0.72, 0.13, 0.012))
+        return SIMD3(0.9, 0.95, 1) * (top * 0.55 + strip) + SIMD3(0.1, 0.45, 0.9) * horizon * 0.7
+            + SIMD3(0.03, 0.04, 0.07)
     }
 
     // MARK: - Tunnels and halls
