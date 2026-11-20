@@ -340,9 +340,10 @@ enum CarMesh {
         glow.diffuse.contents = UIColor.black
         glow.emission.contents = color(light)
         glow.emission.intensity = 3
+        // Bodywork only reflects light; the glow strips and plumes are the car's only emitters.
         return [
-            pbr(paint, metal: 0.55, rough: 0.32, emit: 0.12),
-            pbr(accent, metal: 0.3, rough: 0.4, emit: 0.5),
+            pbr(paint, metal: 0.55, rough: 0.32),
+            pbr(accent, metal: 0.3, rough: 0.4),
             pbr(SIMD3(0.09, 0.1, 0.12), metal: 0.9, rough: 0.45),
             pbr(SIMD3(0.03, 0.05, 0.08), metal: 1, rough: 0.08),
             glow,

@@ -73,7 +73,8 @@ final class ShowroomView: SCNView, UIGestureRecognizerDelegate {
         cameraNode.camera?.zFar = 80
         cameraNode.camera?.wantsHDR = true
         cameraNode.camera?.bloomIntensity = 0.4
-        cameraNode.camera?.bloomThreshold = 0.9
+        // Only real emitters (podium rings, glow strips, plumes) are bright enough to bloom.
+        cameraNode.camera?.bloomThreshold = 1.6
         cameraNode.camera?.bloomBlurRadius = 8
         cameraNode.camera?.vignettingIntensity = 0.6
         cameraNode.camera?.vignettingPower = 0.8
