@@ -531,7 +531,7 @@ private final class GarageStudio: SCNView {
     private static func makeScene() -> SCNScene {
         let scene = SCNScene()
         scene.lightingEnvironment.contents = ProceduralTextures.studio
-        scene.lightingEnvironment.intensity = 0.65
+        scene.lightingEnvironment.intensity = 0.33
         let fixtures: [(UIColor, CGFloat, SCNVector3)] = [
             (.white, 1500, SCNVector3(-0.94, -0.55, 0)),
             (UIColor(red: 0.29, green: 0.71, blue: 1, alpha: 1), 550, SCNVector3(-0.41, 2.28, 0)),

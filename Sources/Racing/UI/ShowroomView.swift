@@ -44,7 +44,7 @@ final class ShowroomView: SCNView, UIGestureRecognizerDelegate {
         // The studio fills the shadows and puts reflections in the paint; the key light below
         // does the lighting, so each car has a bright side, a dark side and a shadow.
         scene.lightingEnvironment.contents = ProceduralTextures.studio
-        scene.lightingEnvironment.intensity = 0.6
+        scene.lightingEnvironment.intensity = 0.3
         self.scene = scene
 
         let floor = SCNFloor()
@@ -164,9 +164,11 @@ final class ShowroomView: SCNView, UIGestureRecognizerDelegate {
         cars[i]?.removeFromParentNode()
         let car = CarMesh.build(design).node
         CarMesh.setThrust(0.12, on: car)
-        car.simdPosition = SIMD3(0, 0.26 + CarMesh.axleHeight, 0)
         // Every car is sized to its podium: big ones shrink a little, small ones grow a little.
-        car.simdScale = SIMD3(repeating: min(1.3, 2.5 / Self.footprint(of: car)))
+        // The car's origin is on its axle line, so the lift scales with it to keep the tyres on the deck.
+        let scale = min(1.3, 2.5 / Self.footprint(of: car))
+        car.simdScale = SIMD3(repeating: scale)
+        car.simdPosition = SIMD3(0, 0.265 + CarMesh.axleHeight * scale, 0)
         turntables[i].addChildNode(car)
         cars[i] = car
         accessibilityValue = design.name
