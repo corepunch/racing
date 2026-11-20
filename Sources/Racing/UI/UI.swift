@@ -84,11 +84,31 @@ final class GlowButton: UIButton {
     func setTitleText(_ title: String) { setTitle(title, for: .normal) }
 
     override var isHighlighted: Bool {
-        didSet { alpha = isHighlighted ? 0.6 : 1 }
+        didSet {
+            UIView.animate(withDuration: 0.1) {
+                self.transform = self.isHighlighted ? CGAffineTransform(scaleX: 0.97, y: 0.97) : .identity
+                self.alpha = self.isHighlighted ? 0.8 : (self.isEnabled ? 1 : 0.35)
+            }
+        }
+    }
+
+    override var isEnabled: Bool {
+        didSet { alpha = isEnabled ? 1 : 0.35 }
+    }
+
+    /// Recolours a button whose meaning changes (BUY → OWNED, READY → NOT READY).
+    func restyle(tint: UIColor, filled: Bool) {
+        setTitleColor(filled ? UI.ink : tint, for: .normal)
+        backgroundColor = filled ? tint : tint.withAlphaComponent(0.1)
+        layer.borderWidth = filled ? 0 : 1.5
+        layer.borderColor = tint.withAlphaComponent(0.8).cgColor
+        layer.shadowColor = tint.cgColor
+        layer.shadowRadius = filled ? 14 : 0
+        layer.shadowOpacity = filled ? 0.5 : 0
     }
 
     @objc private func tapped() {
-        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        UI.haptic()
         onTap?()
     }
 }

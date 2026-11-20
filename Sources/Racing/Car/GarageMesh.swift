@@ -1,0 +1,391 @@
+import SceneKit
+import simd
+
+/// Procedural meshes share the faceted surfaces and emissive materials of the race roster.
+enum GarageMesh {
+    private typealias Shell = CarMesh.Shell
+    private typealias Slot = CarMesh.Slot
+    private typealias Station = (z: Float, width: Float, bottom: Float, top: Float)
+    private typealias Nozzle = (position: SIMD3<Float>, radius: Float)
+
+    static func build(_ build: GarageBuild, glow: SIMD3<Float>) -> CarModel {
+        let size = GarageDimensions(build)
+        let car = SCNNode()
+        let ground = SCNNode()
+        ground.position.y = -CarMesh.axleHeight
+        car.addChildNode(ground)
+
+        let frame = makePart(build.part(at: .frame) ?? .sprint, size: size, paint: build.paint(for: .frame))
+        ground.addChildNode(frame)
+        for slot in [CarSlot.front, .rear, .motor] {
+            guard let part = build.part(at: slot) else { continue }
+            let node = makePart(part, size: size, paint: build.paint(for: slot))
+            switch slot {
+            case .front: node.position.z = -size.end
+            case .rear: node.position.z = size.end
+            default: node.simdPosition = motorMount(size)
+            }
+            frame.addChildNode(node)
+
+            if let socket = part.attachment {
+                let mount = SCNNode()
+                mount.name = "\(socket.rawValue)-mount"
+                mount.simdPosition = addonMount(for: part)
+                node.addChildNode(mount)
+                if let addon = build.part(at: socket) {
+                    mount.addChildNode(makePart(addon, size: size, paint: build.paint(for: socket)))
+                }
+            }
+        }
+
+        let motor = build.part(at: .motor) ?? .pulse
+        let exhausts = nozzles(for: motor).map { ($0.position + motorMount(size) + ground.simdPosition, $0.radius) }
+        car.addChildNode(CarMesh.makeFlames(exhausts, glow: glow))
+
+        let suspension = suspensionMesh(size)
+        ground.addChildNode(suspension)
+        let radii = WheelPosition.allCases.map { $0.isFront ? size.frontRadius : size.rearRadius }
+        let wheels = zip(WheelPosition.allCases, radii).map { position, radius in
+            let node = wheel(build.part(at: .wheels) ?? .slick, radius: radius, width: size.tyreWidth,
+                             paint: build.paint(for: .wheels, wheel: position))
+            node.name = position.rawValue
+            node.simdPosition = SIMD3(position.side * size.track, radius - CarMesh.axleHeight,
+                                      position.isFront ? -size.axle : size.axle)
+            car.addChildNode(node)
+            return node
+        }
+        return CarModel(node: car, wheels: wheels, radii: radii)
+    }
+
+    static func preview(_ part: CarPart) -> SCNNode {
+        var build = GarageBuild()
+        build.equip(part, at: part.slot)
+        let size = GarageDimensions(build)
+        if part.slot == .wheels {
+            return wheel(part, radius: size.rearRadius, width: size.tyreWidth, paint: part.slot.factoryPaint)
+        }
+        return makePart(part, size: size, paint: part.slot.factoryPaint)
+    }
+
+    private static func makePart(_ part: CarPart, size: GarageDimensions, paint: GaragePaint) -> SCNNode {
+        var shell = Shell()
+        switch part.slot {
+        case .frame: frame(part, size: size, shell: &shell)
+        case .front: front(part, shell: &shell)
+        case .rear: rear(part, shell: &shell)
+        case .motor: motor(part, shell: &shell)
+        case .splitter: splitter(part, shell: &shell)
+        case .wing: wing(part, shell: &shell)
+        case .wheels: preconditionFailure("Wheel parts use their own rotating carrier")
+        }
+        return node(named: part.rawValue, shell: shell, paint: paint)
+    }
+
+    private static func node(named name: String, shell: Shell, paint: GaragePaint) -> SCNNode {
+        let color = paint.rgb
+        let trim = color * 0.67 + SIMD3<Float>(0.22, 0.25, 0.28)
+        let light: SIMD3<Float> = name == CarPart.cutTail.rawValue || name == CarPart.flightDeck.rawValue
+            || name == CarPart.twinTail.rawValue ? SIMD3(1, 0.13, 0.37) : SIMD3(0.27, 0.87, 1)
+        let materials = CarMesh.materials(paint: color, accent: trim, light: light)
+        let result = SCNNode(geometry: shell.mesh.geometry(materials: materials))
+        result.name = name
+        return result
+    }
+
+    private static func panel(_ shell: inout Shell, _ slot: Slot, x: Float = 0,
+                              roof: Float = 0.74, _ stations: [Station]) {
+        shell.loft(slot, stations.map {
+            CarMesh.section(x: x, z: $0.z, halfWidth: $0.width, top: $0.top, bottom: $0.bottom,
+                            chine: 0.43, roof: roof)
+        })
+    }
+
+    private static func frame(_ part: CarPart, size: GarageDimensions, shell: inout Shell) {
+        let w = size.bodyWidth, h = size.deckHeight, end = size.end
+        panel(&shell, .metal, roof: 0.91, [
+            (-end - 0.05, w * 0.61, 0.25, 0.39), (-end * 0.64, w, 0.24, 0.41),
+            (end * 0.67, w, 0.24, 0.41), (end + 0.05, w * 0.62, 0.25, 0.39),
+        ])
+
+        let core = part == .atlas ? w * 0.65 : w
+        panel(&shell, .paint, roof: part == .sprint ? 0.49 : 0.69, [
+            (-end - 0.06, core * 0.47, 0.31, h * 0.89), (-end * 0.56, core * 0.88, 0.33, h + 0.05),
+            (-end * 0.12, core, 0.33, h + 0.13), (end * 0.34, core * 0.91, 0.33, h + 0.06),
+            (end + 0.05, core * 0.61, 0.32, h),
+        ])
+
+        if part != .sprint {
+            for side: Float in [-1, 1] {
+                let x = side * w * (part == .atlas ? 0.94 : 0.75)
+                let span = part == .atlas ? w * 0.32 : w * 0.40
+                panel(&shell, .paint, x: x, [
+                    (-end * 0.84, span * 0.55, 0.33, h - 0.09),
+                    (-end * 0.40, span, 0.31, h + 0.02), (end * 0.24, span, 0.30, h + 0.08),
+                    (end * 0.78, span * 0.68, 0.31, h - 0.08),
+                ])
+                shell.box(.glow, centre: SIMD3(x + side * span * 0.63, h - 0.085, -end * 0.28),
+                          size: SIMD3(0.035, 0.025, end * 0.49))
+                for i in 0..<3 {
+                    shell.box(.metal, centre: SIMD3(x, h + 0.055, end * 0.10 + Float(i) * 0.083),
+                              size: SIMD3(span, 0.041, 0.039))
+                }
+            }
+        }
+
+        let glassWidth = core * (part == .atlas ? 0.83 : 0.68)
+        let rise: Float = part == .sprint ? 0.30 : 0.40
+        panel(&shell, .glass, roof: 0.75, [
+            (-end * 0.62, glassWidth * 0.66, h + 0.04, h + 0.10),
+            (-end * 0.27, glassWidth, h + 0.09, h + rise),
+            (-end * 0.02, glassWidth * 0.94, h + 0.09, h + rise + 0.015),
+            (end * 0.24, glassWidth * 0.72, h + 0.04, h + 0.15),
+        ])
+        for side: Float in [-1, 1] {
+            shell.box(.accent, centre: SIMD3(side * glassWidth, h + 0.10, -end * 0.27),
+                      size: SIMD3(0.09, 0.046, end * 0.56))
+        }
+    }
+
+    private static func front(_ part: CarPart, shell: inout Shell) {
+        switch part {
+        case .plow:
+            panel(&shell, .paint, [
+                (-0.72, 0.68, 0.27, 0.40), (-0.63, 0.99, 0.25, 0.56),
+                (-0.46, 0.87, 0.26, 0.66), (-0.26, 0.48, 0.27, 0.62), (0.14, 0.30, 0.32, 0.51),
+            ])
+            panel(&shell, .metal, [(-0.731, 0.46, 0.28, 0.35), (-0.62, 0.53, 0.27, 0.43)])
+            for side: Float in [-1, 1] {
+                shell.box(.glow, centre: SIMD3(side * 0.62, 0.405, -0.665), size: SIMD3(0.24, 0.034, 0.057))
+            }
+        case .fork:
+            panel(&shell, .metal, [
+                (-0.61, 0.91, 0.29, 0.41), (-0.46, 0.86, 0.31, 0.48), (0.14, 0.29, 0.32, 0.50),
+            ])
+            for side: Float in [-1, 1] {
+                panel(&shell, .paint, x: side * 0.77, [
+                    (-0.87, 0.26, 0.31, 0.47), (-0.69, 0.39, 0.29, 0.61), (-0.45, 0.28, 0.32, 0.67),
+                ])
+                shell.box(.glow, centre: SIMD3(side * 0.77, 0.43, -0.873),
+                          size: SIMD3(0.24, 0.038, 0.032))
+                shell.box(.accent, centre: SIMD3(side * 0.77, 0.603, -0.60),
+                          size: SIMD3(0.16, 0.038, 0.17))
+            }
+        default:
+            panel(&shell, .paint, roof: 0.63, [
+                (-0.40, 0.31, 0.28, 0.39), (-0.29, 0.54, 0.28, 0.44), (0.14, 0.37, 0.30, 0.52),
+            ])
+            shell.box(.metal, centre: SIMD3(0, 0.29, -0.22), size: SIMD3(0.86, 0.099, 0.22))
+            for side: Float in [-1, 1] {
+                shell.box(.glow, centre: SIMD3(side * 0.17, 0.366, -0.403),
+                          size: SIMD3(0.11, 0.027, 0.03))
+            }
+        }
+        if part.attachment != nil { mountPads(&shell, mount: addonMount(for: part), span: 0.33) }
+    }
+
+    private static func rear(_ part: CarPart, shell: inout Shell) {
+        switch part {
+        case .flightDeck:
+            panel(&shell, .paint, [
+                (-0.13, 0.35, 0.31, 0.50), (0.19, 0.65, 0.26, 0.59),
+                (0.50, 1.04, 0.30, 0.65), (0.76, 0.85, 0.37, 0.55),
+            ])
+            for side: Float in [-1, 1] {
+                shell.box(.glow, centre: SIMD3(side * 0.65, 0.487, 0.766),
+                          size: SIMD3(0.21, 0.041, 0.031))
+                shell.box(.accent, centre: SIMD3(side * 0.76, 0.585, 0.63),
+                          size: SIMD3(0.13, 0.074, 0.24))
+            }
+        case .twinTail:
+            panel(&shell, .metal, [(-0.14, 0.31, 0.31, 0.54), (0.54, 0.84, 0.28, 0.46)])
+            for side: Float in [-1, 1] {
+                panel(&shell, .paint, x: side * 0.76, [
+                    (0.37, 0.29, 0.34, 0.57), (0.60, 0.38, 0.30, 0.74), (0.86, 0.26, 0.38, 0.66),
+                ])
+                shell.box(.glow, centre: SIMD3(side * 0.76, 0.555, 0.87),
+                          size: SIMD3(0.33, 0.045, 0.031))
+            }
+            shell.box(.accent, centre: SIMD3(0, 0.53, 0.49), size: SIMD3(1.16, 0.17, 0.27))
+        default:
+            panel(&shell, .paint, [
+                (-0.13, 0.45, 0.31, 0.48), (0.16, 0.49, 0.27, 0.52), (0.39, 0.31, 0.34, 0.44),
+            ])
+            shell.box(.glow, centre: SIMD3(0, 0.411, 0.398), size: SIMD3(0.37, 0.029, 0.026))
+        }
+        if part.attachment != nil { mountPads(&shell, mount: addonMount(for: part), span: 0.49) }
+    }
+
+    private static func addonMount(for part: CarPart) -> SIMD3<Float> {
+        switch part {
+        case .plow: return SIMD3(0, 0.51, -0.53)
+        case .fork: return SIMD3(0, 0.43, -0.68)
+        case .flightDeck: return SIMD3(0, 0.61, 0.45)
+        default: return SIMD3(0, 0.61, 0.49)
+        }
+    }
+
+    private static func mountPads(_ shell: inout Shell, mount: SIMD3<Float>, span: Float) {
+        for side: Float in [-1, 1] {
+            let pad = mount + SIMD3(side * span, 0.025, 0)
+            shell.box(.metal, centre: pad, size: SIMD3(0.18, 0.085, 0.16))
+            shell.box(.accent, centre: pad + SIMD3(0, 0.047, 0), size: SIMD3(0.066, 0.018, 0.076))
+        }
+    }
+
+    private static func splitter(_ part: CarPart, shell: inout Shell) {
+        if part == .divePlanes {
+            shell.box(.metal, centre: SIMD3(0, 0.073, -0.04), size: SIMD3(1.54, 0.073, 0.17))
+            for side: Float in [-1, 1] {
+                panel(&shell, .paint, x: side * 0.88, [
+                    (-0.46, 0.27, 0.09, 0.14), (-0.25, 0.39, 0.11, 0.19), (0.12, 0.24, 0.15, 0.21),
+                ])
+                shell.box(.accent, centre: SIMD3(side * 1.20, 0.22, -0.21), size: SIMD3(0.07, 0.17, 0.24))
+            }
+        } else {
+            panel(&shell, .paint, roof: 0.92, [
+                (-0.42, 0.58, 0.07, 0.12), (-0.29, 1.07, 0.08, 0.14), (0.10, 0.78, 0.11, 0.16),
+            ])
+            shell.box(.accent, centre: SIMD3(0, 0.135, -0.34), size: SIMD3(0.71, 0.025, 0.085))
+        }
+    }
+
+    private static func wing(_ part: CarPart, shell: inout Shell) {
+        let high: Float = part == .doubleDeck ? 0.79 : 0.46
+        let span: Float = part == .doubleDeck ? 1.23 : 0.99
+        for side: Float in [-1, 1] {
+            shell.slab(.metal, root: (SIMD3(side * 0.49, 0.03, -0.07), SIMD3(side * 0.49, 0.03, 0.08)),
+                       tip: (SIMD3(side * 0.71, high, 0.06), SIMD3(side * 0.71, high, 0.24)),
+                       thickness: SIMD3(0.046, 0, 0))
+            shell.box(.accent, centre: SIMD3(side * span, high - 0.055, 0.18),
+                      size: SIMD3(0.075, 0.23, 0.46))
+        }
+        panel(&shell, .paint, roof: 1, [
+            (-0.11, span * 0.82, high, high + 0.07), (0.05, span, high + 0.015, high + 0.09),
+            (0.40, span * 0.92, high + 0.041, high + 0.07),
+        ])
+        if part == .doubleDeck {
+            panel(&shell, .paint, roof: 1, [
+                (-0.04, 0.74, 0.34, 0.41), (0.12, 0.93, 0.35, 0.43), (0.36, 0.84, 0.36, 0.42),
+            ])
+        }
+    }
+
+    private static func motorMount(_ size: GarageDimensions) -> SIMD3<Float> {
+        SIMD3(0, size.deckHeight - 0.015, size.end - 0.42)
+    }
+
+    private static func nozzles(for part: CarPart) -> [Nozzle] {
+        switch part {
+        case .twinJet:
+            return [(SIMD3(-0.30, 0.21, 0.78), 0.164), (SIMD3(0.30, 0.21, 0.78), 0.164)]
+        case .reactor:
+            return [(SIMD3(-0.34, 0.17, 0.76), 0.12), (SIMD3(0, 0.35, 0.80), 0.23),
+                    (SIMD3(0.34, 0.17, 0.76), 0.12)]
+        default:
+            return [(SIMD3(0, 0.14, 0.71), 0.147)]
+        }
+    }
+
+    private static func motor(_ part: CarPart, shell: inout Shell) {
+        let width: Float = part == .pulse ? 0.24 : 0.47
+        panel(&shell, .metal, [(-0.35, width * 0.8, -0.035, 0.12), (0.64, width, -0.03, 0.16)])
+        if part == .reactor {
+            panel(&shell, .paint, [
+                (-0.31, 0.30, 0.07, 0.22), (-0.12, 0.38, 0.04, 0.61),
+                (0.36, 0.39, 0.08, 0.56), (0.59, 0.31, 0.08, 0.47),
+            ])
+            for side: Float in [-1, 1] {
+                shell.box(.glow, centre: SIMD3(side * 0.235, 0.557, 0.16), size: SIMD3(0.039, 0.075, 0.30))
+            }
+        }
+        for (position, radius) in nozzles(for: part) {
+            func ring(_ depth: Float, _ scale: Float) -> [SIMD3<Float>] {
+                (0..<10).map { index in
+                    let angle = Float(index) * 2 * .pi / 10
+                    return position + SIMD3(cos(angle) * radius * scale, sin(angle) * radius * scale, depth)
+                }
+            }
+            shell.loft(.paint, [ring(-0.94, 0.64), ring(-0.71, 1.14), ring(-0.27, 1.19), ring(-0.14, 0.91)])
+            shell.loft(.metal, [ring(-0.25, 0.92), ring(-0.075, 1.03), ring(-0.02, 0.98)])
+            shell.loft(.glow, [ring(-0.069, 0.76), ring(-0.014, 0.73)])
+            shell.loft(.metal, [ring(-0.027, 0.35), ring(-0.009, 0.31)])
+        }
+    }
+
+    private static func suspensionMesh(_ size: GarageDimensions) -> SCNNode {
+        var shell = Shell()
+        for position in WheelPosition.allCases {
+            let z = position.isFront ? -size.axle : size.axle
+            let radius = position.isFront ? size.frontRadius : size.rearRadius
+            let hub = position.side * (size.track - size.tyreWidth * 0.42)
+            let root = position.side * size.bodyWidth * 0.65
+            for (delta, height) in [(Float(-0.19), Float(0.36)), (0.17, 0.44)] {
+                shell.slab(.metal, root: (SIMD3(root, height, z + delta - 0.065),
+                                         SIMD3(root, height, z + delta + 0.065)),
+                           tip: (SIMD3(hub, radius, z - 0.046), SIMD3(hub, radius, z + 0.046)),
+                           thickness: SIMD3(0, 0.036, 0))
+            }
+        }
+        return node(named: "suspension", shell: shell, paint: CarSlot.frame.factoryPaint)
+    }
+
+    private static func wheel(_ part: CarPart, radius: Float, width: Float, paint: GaragePaint) -> SCNNode {
+        var shell = Shell()
+        let segments = part == .wideTrack ? 20 : 24
+        func ring(_ x: Float, _ radius: Float) -> [SIMD3<Float>] {
+            (0..<segments).map { i in
+                let angle = Float(i) * 2 * .pi / Float(segments)
+                return SIMD3(x, cos(angle) * radius, sin(angle) * radius)
+            }
+        }
+        for side: Float in [-1, 1] {
+            let inner = side * width * 0.43
+            let outer = side * width * 0.51
+            let lip: Float = part == .aero ? 0.78 : 0.68
+            shell.loft(.paint, [ring(inner, radius * lip), ring(outer, radius * lip * 0.96)])
+            shell.loft(.metal, [ring(outer, radius * 0.28), ring(outer + side * 0.024, radius * 0.23)])
+            for i in 0..<(part == .slick ? 3 : 6) {
+                let angle = 2 * Float.pi * Float(i) / (part == .slick ? 3 : 6)
+                let a = SIMD3<Float>(0, cos(angle), sin(angle))
+                shell.slab(part == .aero ? .accent : .metal,
+                           root: (SIMD3(outer + side * 0.014, 0, 0), SIMD3(outer + side * 0.015, 0.045, 0)),
+                           tip: (a * radius * lip * 0.90 + SIMD3(outer + side * 0.02, 0, 0),
+                                 a * radius * lip * 0.94 + SIMD3(outer + side * 0.02, 0.065, 0)),
+                           thickness: SIMD3(0.011, 0, 0))
+            }
+        }
+        let node = node(named: part.rawValue, shell: shell, paint: paint)
+        var tyre = Shell()
+        // The closed section follows the tire sidewalls without covering the colored rims.
+        for side: Float in [-1, 1] {
+            let edge = ring(side * width * 0.49, radius * 0.74)
+            let sidewall = ring(side * width / 2, radius * 0.86)
+            let shoulder = ring(side * width * 0.36, radius * 0.98)
+            let crown = ring(0, radius)
+            for i in 0..<segments {
+                let j = (i + 1) % segments
+                for (inner, outer) in [(edge, sidewall), (sidewall, shoulder), (shoulder, crown)] {
+                    tyre.quad(.metal, inner[i], inner[j], outer[j], outer[i], from: .zero)
+                }
+            }
+        }
+        let rubber = SCNMaterial()
+        rubber.lightingModel = .physicallyBased
+        rubber.diffuse.contents = UIColor(white: 0.06, alpha: 1)
+        rubber.roughness.contents = 0.90
+        node.addChildNode(SCNNode(geometry: tyre.mesh.geometry(materials: Array(repeating: rubber, count: 5))))
+        if part == .wideTrack {
+            for i in 0..<segments {
+                let angle = Float(i) * 2 * .pi / Float(segments)
+                let block = SCNBox(width: CGFloat(width * 0.70), height: 0.025, length: 0.058, chamferRadius: 0.005)
+                block.firstMaterial = rubber
+                let tread = SCNNode(geometry: block)
+                tread.simdPosition = SIMD3(i.isMultiple(of: 2) ? -0.04 : 0.04,
+                                          cos(angle) * radius * 0.976, sin(angle) * radius * 0.976)
+                tread.eulerAngles.x = angle
+                node.addChildNode(tread)
+            }
+        }
+        return node
+    }
+}

@@ -18,10 +18,10 @@ enum CarMesh {
     /// Underside of the bodywork above the road.
     private static let clearance: Float = 0.3
 
-    private enum Slot: Int, CaseIterable { case paint, accent, metal, glass, glow }
+    enum Slot: Int, CaseIterable { case paint, accent, metal, glass, glow }
 
     /// Flat-shaded faces that always wind outward from a reference point.
-    private struct Shell {
+    struct Shell {
         var mesh = MeshBuilder(materialCount: Slot.allCases.count)
 
         mutating func tri(_ slot: Slot, _ a: SIMD3<Float>, _ b: SIMD3<Float>, _ c: SIMD3<Float>, from o: SIMD3<Float>) {
@@ -52,10 +52,12 @@ enum CarMesh {
                     quad(slot, a[k], a[k1], b[k1], b[k], from: o)
                 }
             }
-            let middle = centre(rings[rings.count / 2])
-            for (ring, capSlot) in [(rings[0], slot), (rings[rings.count - 1], endCap ?? slot)] {
+            let last = rings.count - 1
+            for (ring, adjacent, capSlot) in [(rings[0], rings[1], slot),
+                                              (rings[last], rings[last - 1], endCap ?? slot)] {
                 let c = centre(ring)
-                for k in 0..<ring.count { tri(capSlot, c, ring[k], ring[(k + 1) % ring.count], from: middle) }
+                let inside = (c + centre(adjacent)) / 2
+                for k in 0..<ring.count { tri(capSlot, c, ring[k], ring[(k + 1) % ring.count], from: inside) }
             }
         }
 
@@ -79,7 +81,7 @@ enum CarMesh {
     }
 
     /// Six-sided body section: flat roof, chine at the widest point, narrower floor.
-    private static func section(x: Float = 0, z: Float, halfWidth w: Float, top: Float, bottom: Float = clearance,
+    static func section(x: Float = 0, z: Float, halfWidth w: Float, top: Float, bottom: Float = clearance,
                                 chine: Float = 0.45, roof: Float = 0.4) -> [SIMD3<Float>] {
         let yc = bottom + (top - bottom) * chine
         return [
@@ -98,6 +100,7 @@ enum CarMesh {
     }
 
     static func build(_ design: CarDesign) -> CarModel {
+        if let garage = design.garage { return GarageMesh.build(garage, glow: design.glow) }
         var shell = Shell()
         let L = design.length, W = design.width, H = design.height
         let noseZ = -L / 2, tailZ = L / 2
@@ -228,30 +231,8 @@ enum CarMesh {
         chassis.addChildNode(hull)
 
         // Afterburner plumes: additive cones the game stretches with thrust.
-        let flames = SCNNode()
-        flames.name = "flames"
+        let flames = makeFlames(exhausts.map { ($0, r) }, glow: design.glow)
         flames.simdPosition = lower
-        let plume = SCNMaterial()
-        plume.lightingModel = .constant
-        plume.diffuse.contents = UIColor.black
-        plume.emission.contents = color(design.glow)
-        plume.emission.intensity = 2.4
-        plume.blendMode = .add
-        plume.writesToDepthBuffer = false
-        plume.isDoubleSided = true
-        for e in exhausts {
-            let cone = SCNCone(topRadius: 0, bottomRadius: CGFloat(r * 0.72), height: 1)
-            cone.radialSegmentCount = 8
-            cone.firstMaterial = plume
-            let flame = SCNNode(geometry: cone)
-            // Cone points backwards with its base on the exhaust; the pivot makes scaling stretch it.
-            flame.pivot = SCNMatrix4MakeTranslation(0, -0.5, 0)
-            flame.eulerAngles = SCNVector3(Float.pi / 2, 0, 0)
-            flame.simdPosition = e
-            flame.castsShadow = false
-            flames.addChildNode(flame)
-
-        }
         chassis.addChildNode(flames)
 
         let wheels = places.map { p -> SCNNode in
@@ -261,6 +242,32 @@ enum CarMesh {
             return wheel
         }
         return CarModel(node: chassis, wheels: wheels, radii: places.map(\.r))
+    }
+
+    static func makeFlames(_ exhausts: [(SIMD3<Float>, Float)], glow: SIMD3<Float>) -> SCNNode {
+        let flames = SCNNode()
+        flames.name = "flames"
+        let plume = SCNMaterial()
+        plume.lightingModel = .constant
+        plume.diffuse.contents = UIColor.black
+        plume.emission.contents = color(glow)
+        plume.emission.intensity = 2.4
+        plume.blendMode = .add
+        plume.writesToDepthBuffer = false
+        plume.isDoubleSided = true
+        for (position, radius) in exhausts {
+            let cone = SCNCone(topRadius: 0, bottomRadius: CGFloat(radius * 0.72), height: 1)
+            cone.radialSegmentCount = 8
+            cone.firstMaterial = plume
+            let flame = SCNNode(geometry: cone)
+            // Cone points backwards with its base on the exhaust; the pivot makes scaling stretch it.
+            flame.pivot = SCNMatrix4MakeTranslation(0, -0.5, 0)
+            flame.eulerAngles = SCNVector3(Float.pi / 2, 0, 0)
+            flame.simdPosition = position
+            flame.castsShadow = false
+            flames.addChildNode(flame)
+        }
+        return flames
     }
 
     /// A fat slick on a bright rim. The carrier node is what the physics turns; a dark
@@ -307,11 +314,15 @@ enum CarMesh {
         }
     }
 
-    private static func color(_ c: SIMD3<Float>) -> UIColor {
+    static func color(_ c: SIMD3<Float>) -> UIColor {
         UIColor(red: CGFloat(c.x), green: CGFloat(c.y), blue: CGFloat(c.z), alpha: 1)
     }
 
     private static func materials(_ design: CarDesign) -> [SCNMaterial] {
+        materials(paint: design.primary, accent: design.accent, light: design.glow)
+    }
+
+    static func materials(paint: SIMD3<Float>, accent: SIMD3<Float>, light: SIMD3<Float>) -> [SCNMaterial] {
         func pbr(_ c: SIMD3<Float>, metal: CGFloat, rough: CGFloat, emit: CGFloat = 0) -> SCNMaterial {
             let m = SCNMaterial()
             m.lightingModel = .physicallyBased
@@ -327,11 +338,11 @@ enum CarMesh {
         let glow = SCNMaterial()
         glow.lightingModel = .constant
         glow.diffuse.contents = UIColor.black
-        glow.emission.contents = color(design.glow)
+        glow.emission.contents = color(light)
         glow.emission.intensity = 3
         return [
-            pbr(design.primary, metal: 0.55, rough: 0.32, emit: 0.12),
-            pbr(design.accent, metal: 0.3, rough: 0.4, emit: 0.5),
+            pbr(paint, metal: 0.55, rough: 0.32, emit: 0.12),
+            pbr(accent, metal: 0.3, rough: 0.4, emit: 0.5),
             pbr(SIMD3(0.09, 0.1, 0.12), metal: 0.9, rough: 0.45),
             pbr(SIMD3(0.03, 0.05, 0.08), metal: 1, rough: 0.08),
             glow,

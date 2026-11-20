@@ -100,9 +100,11 @@ final class Car {
         // A box over the whole car, a little wider than the tyres so they stay off the sloping barriers,
         // and clear of the road so only the wheels touch it.
         let box = SCNBox(width: CGFloat(design.halfWidth * 2 + 0.3), height: 0.6,
-                         length: CGFloat(design.length * 0.92), chamferRadius: 0.12)
+                         length: CGFloat(design.frontCollisionExtent + design.rearCollisionExtent),
+                         chamferRadius: 0.12)
+        let midpoint = (design.rearCollisionExtent - design.frontCollisionExtent) / 2
         let shape = SCNPhysicsShape(shapes: [SCNPhysicsShape(geometry: box, options: nil)],
-                                    transforms: [NSValue(scnMatrix4: SCNMatrix4MakeTranslation(0, 0.5, 0))])
+                                    transforms: [NSValue(scnMatrix4: SCNMatrix4MakeTranslation(0, 0.5, midpoint))])
         let body = SCNPhysicsBody(type: .dynamic, shape: shape)
         body.mass = Self.mass
         body.centerOfMassOffset = SCNVector3(0, -0.35, 0)
@@ -147,6 +149,43 @@ final class Car {
             body.resetTransform()
             world.addBehavior(vehicle)
         }
+    }
+
+    // MARK: - Online
+
+    /// A car someone else drives: off the simulation but still solid (kinematic), so the
+    /// local car bumps into it. Posed from the network every frame; hidden until the first pose.
+    func setRemote() {
+        setDemo(true)
+        node.isHidden = true
+    }
+
+    func applyRemote(_ state: NetCarState, track: TrackPath, dt: Float) {
+        node.isHidden = false
+        worldPosition = state.position
+        node.simdPosition = state.position
+        node.simdOrientation = state.orientation
+        speed = simd_length(state.velocity)
+        let forward = state.orientation.act(SIMD3<Float>(0, 0, -1))
+        worldForward = speed > 6 ? state.velocity / speed : forward
+        yaw = atan2(forward.x, -forward.z)
+        progress = state.progress
+        s = Self.wrap(state.progress, track.totalLength)
+        boost = state.boosting ? Self.boostTime : 0
+        // No physics turns the wheels, so roll them by hand.
+        let roll = simd_dot(state.velocity, forward) * dt
+        for (wheel, radius) in zip(model.wheels, model.radii) { wheel.simdEulerAngles.x -= roll / radius }
+        let exhaustTarget = min(1, speed / design.spec.topSpeed) + (state.boosting ? 0.6 : 0)
+        exhaust += (exhaustTarget - exhaust) * min(1, 2.5 * dt)
+        CarMesh.setThrust(exhaust, on: node)
+    }
+
+    /// This car's pose for the other players.
+    var netState: NetCarState {
+        let v = node.physicsBody?.velocity ?? SCNVector3Zero
+        return NetCarState(position: worldPosition, orientation: node.presentation.simdWorldOrientation,
+                           velocity: SIMD3(Float(v.x), Float(v.y), Float(v.z)), progress: progress,
+                           steer: smoothSteer, boosting: boost > 0)
     }
 
     // MARK: - Placement

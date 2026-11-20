@@ -1,15 +1,53 @@
 import SceneKit
 import simd
 
+/// Someone on the grid besides the player.
+struct Entrant {
+    var name: String
+    var design: CarDesign
+}
+
+/// A networked race. Entries are in grid order of car id; the first is the player's own car.
+struct OnlineRace {
+    struct Entry {
+        var id: UInt8
+        var name: String
+        var design: CarDesign
+        /// Driven on another device (true) or here, by the player or as one of the host's bots.
+        var remote: Bool
+    }
+    let client: RaceClient
+    let entries: [Entry]
+}
+
 struct RaceConfig {
     var definition: TrackDefinition
-    var carIndex = 0
+    var player: CarDesign
+    var playerName = "YOU"
+    var rivals: [Entrant]
     var laps = 3
     /// Driver assist: slows the car for corners it is too fast for and leans it away from
     /// a barrier at the last moment (`Car.guardSteer`). It never steers along the road.
     var assist = true
     /// 0 easy, 1 normal, 2 hard.
     var difficulty = 1
+    /// Set for a networked race: who is on the grid, and the connection.
+    var online: OnlineRace?
+
+    /// A quick race in one of the stock cars against the rest of the roster.
+    init(definition: TrackDefinition, carIndex: Int = 0) {
+        self.definition = definition
+        let roster = CarRoster.all
+        let chosen = min(max(carIndex, 0), roster.count - 1)
+        player = roster[chosen]
+        rivals = roster.indices.filter { $0 != chosen }.map { Entrant(name: roster[$0].name, design: roster[$0]) }
+    }
+
+    init(definition: TrackDefinition, player: CarDesign, rivals: [Entrant]) {
+        self.definition = definition
+        self.player = player
+        self.rivals = rivals
+    }
 }
 
 struct RaceStanding {
@@ -74,6 +112,11 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
     let config: RaceConfig
 
     private(set) var cars: [Car] = []
+    private var names: [String] = []
+    /// Online only: each car's id, and whether another device drives it.
+    private var carIDs: [UInt8] = []
+    private var remote: [Bool] = []
+    private var lastTick = 0
     private var player: Car { cars[0] }
     private var lapsDone: [Int] = []
     private var laneTimers: [Float] = []
@@ -177,14 +220,21 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
         scene.rootNode.addChildNode(CityScenery.build(path: track))
         boostSections = TrackSections.plan(path: track).map { $0.deck == .boost }
 
-        // The player's car first, then every other design as a rival.
-        let roster = CarRoster.all
-        let chosen = min(max(config.carIndex, 0), roster.count - 1)
-        let order = [chosen] + roster.indices.filter { $0 != chosen }
-        cars = order.map { Car(design: roster[$0]) }
-        for car in cars {
+        // The player's car first, then the rivals.
+        if let online = config.online {
+            cars = online.entries.map { Car(design: $0.design) }
+            names = online.entries.map(\.name)
+            carIDs = online.entries.map(\.id)
+            remote = online.entries.map(\.remote)
+        } else {
+            cars = [Car(design: config.player)] + config.rivals.map { Car(design: $0.design) }
+            names = [config.playerName] + config.rivals.map(\.name)
+            remote = cars.map { _ in false }
+        }
+        for (i, car) in cars.enumerated() {
             scene.rootNode.addChildNode(car.node)
             car.install(in: scene.physicsWorld)
+            if remote[i] { car.setRemote() }
         }
 
         setupCamera()
@@ -196,9 +246,12 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
         let count = cars.count
         let lanes: [Float] = [-3, 3, -1.2, 1.2, 0, -2]
         let basePace: Float = [0.9, 0.95, 1.0][min(max(config.difficulty, 0), 2)]
+        // Online, everyone works out the same grid from the car ids.
+        let gridOrder = carIDs.isEmpty ? [] : carIDs.sorted()
         for (i, car) in cars.enumerated() {
             // Rivals fill the front of the grid; the player starts at the back.
-            let slot = i == 0 ? count - 1 : i - 1
+            var slot = i == 0 ? count - 1 : i - 1
+            if !gridOrder.isEmpty { slot = gridOrder.firstIndex(of: carIDs[i]) ?? i }
             car.place(progress: -(10 + 7 * Float(slot)), lateral: slot % 2 == 0 ? -3.2 : 3.2, on: track)
             car.lane = i == 0 ? 0 : lanes[(i - 1) % lanes.count]
             car.pace = i == 0 ? 1 : basePace - 0.012 * Float(i - 1)
@@ -210,6 +263,7 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
         steerHistory.removeAll()
         cameraForward = nil
         cameraLead = 0
+        lastTick = 0
         phase = autoDrive ? .racing : .countdown(3.6)
         publishHUD()
     }
@@ -283,6 +337,13 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
         lastTime = time
         guard dt > 0 else { return }
 
+        if let online = config.online {
+            updateOnline(online.client, dt: dt)
+            updateCamera(dt: dt)
+            publishHUD()
+            return
+        }
+
         if autoDrive {
             updateDemo(dt: dt)
             updateCamera(dt: dt)
@@ -311,6 +372,45 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
         if debugDriver != nil { printTelemetry(dt: dt) }
     }
 
+    // MARK: - Online
+
+    /// The race clock is the server's: the countdown and every lap time are measured against
+    /// it, so all devices agree. Local cars (the player, the host's bots) are simulated here and
+    /// sent out; the others are posed from interpolated snapshots.
+    private func updateOnline(_ client: RaceClient, dt: Float) {
+        let now = client.serverTime
+        switch client.phase {
+        case .lobby, .loading:
+            for (i, car) in cars.enumerated() where !remote[i] { car.step(dt: dt, input: CarInput(), track: track, hold: true) }
+        case .countdown(let start):
+            let left = start - now
+            for (i, car) in cars.enumerated() where !remote[i] { car.step(dt: dt, input: CarInput(), track: track, hold: true) }
+            let tick = Int(ceil(left))
+            if tick != lastTick, tick > 0, tick <= 3 { emit(.countdown(tick)) }
+            lastTick = tick
+        case .racing(let start):
+            if case .countdown = phase {
+                phase = .racing
+                emit(.countdown(0))
+            }
+            raceTime = Float(now - start)
+            stepCars(dt: dt)
+        case .results:
+            raceTime += dt
+            stepCars(dt: dt)
+        }
+
+        let states = client.remoteStates()
+        let finished = client.finishTimes
+        for (i, car) in cars.enumerated() where remote[i] {
+            if let state = states[carIDs[i]] { car.applyRemote(state, track: track, dt: dt) }
+            car.finishTime = finished[carIDs[i]]
+        }
+        var mine: [UInt8: NetCarState] = [:]
+        for (i, car) in cars.enumerated() where !remote[i] { mine[carIDs[i]] = car.netState }
+        client.send(states: mine)
+    }
+
     // MARK: - Demo
 
     /// The track recorder's drive-through: along the centre line, slowing for corners.
@@ -330,6 +430,7 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
         let playerFinished = player.finishTime != nil
 
         for (i, car) in cars.enumerated() {
+            if remote[i] { continue }
             let human = i == 0 && debugDriver != .rival && !playerFinished
             if human {
                 var input = CarInput(steer: steerInput, brake: brakeInput, throttle: throttleInput)
@@ -377,7 +478,11 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
                 let best = car.bestLap.map { lapTime < $0 } ?? true
                 if best { car.bestLap = lapTime }
                 // A finished car cruises its lap of honour.
-                if done >= config.laps { car.finishTime = raceTime; car.pace = 0.55 }
+                if done >= config.laps {
+                    car.finishTime = raceTime
+                    car.pace = 0.55
+                    config.online?.client.reportFinish(carID: carIDs[i], time: raceTime)
+                }
                 if i == 0 {
                     emit(.lap(time: lapTime, best: best, lapsLeft: config.laps - done))
                     if car.finishTime != nil { finishRace() }
@@ -438,8 +543,9 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
                 record = true
             }
         }
-        let standings = order.map {
-            RaceStanding(name: $0.design.name, color: $0.design.primary, isPlayer: $0 === player, time: $0.finishTime)
+        let standings = order.map { car in
+            RaceStanding(name: names[cars.firstIndex { $0 === car } ?? 0], color: car.design.primary,
+                         isPlayer: car === player, time: car.finishTime)
         }
         emit(.finished(RaceResult(position: position, time: raceTime, bestLap: player.bestLap,
                                   isRecord: record, standings: standings)))

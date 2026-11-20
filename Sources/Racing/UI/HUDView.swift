@@ -107,13 +107,20 @@ final class HUDView: UIView {
     }
 }
 
+/// A line of the results panel's payout block: PRIZE  ₵1,500.
+struct ResultLine {
+    var title: String
+    var value: String
+    var color: UIColor = UI.amber
+}
+
 /// Dimmed overlay with a title, a few lines and stacked buttons: pause and results.
 final class PanelView: UIView {
     init(title: String, titleColor: UIColor = .white, subtitle: String? = nil,
-         rows: [(left: String, right: String, highlight: Bool)] = [], buttons: [GlowButton]) {
+         rows: [(left: String, right: String, highlight: Bool)] = [], money: [ResultLine] = [], buttons: [GlowButton]) {
         super.init(frame: .zero)
         autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        backgroundColor = UIColor(red: 0.01, green: 0.02, blue: 0.05, alpha: 0.72)
+        backgroundColor = UIColor(red: 0.01, green: 0.02, blue: 0.05, alpha: 0.82)
 
         let stack = UIStackView()
         stack.axis = .vertical
@@ -139,7 +146,20 @@ final class PanelView: UIView {
             line.addArrangedSubview(right)
             stack.addArrangedSubview(line)
         }
-        if !rows.isEmpty { stack.setCustomSpacing(26, after: stack.arrangedSubviews.last!) }
+        if !rows.isEmpty { stack.setCustomSpacing(22, after: stack.arrangedSubviews.last!) }
+
+        if !money.isEmpty {
+            let card = CardView(raised: true)
+            let lines = money.map { line -> UIView in
+                let left = UI.caps(line.title, 11, UIColor(white: 1, alpha: 0.8))
+                let right = UI.label(line.value, UI.digits(17, .heavy), line.color, align: .right)
+                right.setContentHuggingPriority(.required, for: .horizontal)
+                return UI.stack([left, right], axis: .horizontal, spacing: 8, alignment: .center)
+            }
+            card.fill(with: UI.stack(lines, spacing: 8), inset: 14)
+            stack.addArrangedSubview(card)
+            stack.setCustomSpacing(22, after: card)
+        }
 
         for button in buttons {
             stack.addArrangedSubview(button)

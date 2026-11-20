@@ -18,6 +18,18 @@ final class GameViewController: UIViewController {
     private let soft = UIImpactFeedbackGenerator(style: .soft)
     private let rigid = UIImpactFeedbackGenerator(style: .rigid)
 
+    /// Books the result (prize money, pink slips) and returns the lines for the results panel.
+    var onFinish: ((RaceResult) -> [ResultLine])?
+    /// Pays for another go; false hides RACE AGAIN (street challenges are one-off).
+    var onRetry: (() -> Bool)?
+    var retryTitle = "RACE AGAIN"
+    /// Online: books the server's results and returns the payout lines.
+    var onOnlineResults: (([NetResult]) -> [ResultLine])?
+    /// Online: the player left the race from the pause panel.
+    var onLeave: (() -> Void)?
+    private var online: RaceClient? { config.online?.client }
+    private var shownOnlineResults = false
+
     /// Debug flags passed on from the launch arguments.
     var autoDrive = false
     var debugDriver: GameScene.DebugDriver?
@@ -114,6 +126,11 @@ final class GameViewController: UIViewController {
             self?.poll()
         }
 
+        if let client = online {
+            client.reportLoaded()
+            if case .loading = client.phase { hud.announce("WAITING FOR THE OTHER DRIVERS", color: UI.cyan, hold: 4) }
+        }
+
         if let cover = loading {
             view.bringSubviewToFront(cover)
             UIView.animate(withDuration: 0.35, animations: { cover.alpha = 0 }) { _ in cover.removeFromSuperview() }
@@ -130,6 +147,10 @@ final class GameViewController: UIViewController {
         gs.throttleInput = controlsView.throttle
         hud.update(gs.hud)
         for event in gs.drainEvents() { handle(event) }
+        if let client = online, !shownOnlineResults, client.phase == .results, !client.results.isEmpty {
+            shownOnlineResults = true
+            showOnlineResults(client)
+        }
     }
 
     private func handle(_ event: RaceEvent) {
@@ -154,7 +175,7 @@ final class GameViewController: UIViewController {
             hud.announce(lapsLeft == 1 ? "FINAL LAP  ·  " + UI.time(time) : text, color: lapsLeft == 1 ? UI.magenta : UI.cyan,
                          hold: 2.2)
         case .finished(let result):
-            showResults(result)
+            if online != nil { showWaiting(result) } else { showResults(result) }
         }
     }
 
@@ -162,6 +183,16 @@ final class GameViewController: UIViewController {
 
     @objc private func pauseTapped() {
         guard panel == nil, gameScene != nil else { return }
+        if online != nil {
+            // The race goes on for everyone else; the car just coasts while the panel is up.
+            controlsView.reset()
+            let resume = GlowButton("RESUME", filled: true)
+            resume.onTap = { [weak self] in self?.closePanel() }
+            let leave = GlowButton("LEAVE RACE", tint: UI.magenta)
+            leave.onTap = { [weak self] in self?.leaveOnline() }
+            show(PanelView(title: "ONLINE", subtitle: "THE RACE KEEPS RUNNING", buttons: [resume, leave]))
+            return
+        }
         setPaused(true)
         let resume = GlowButton("RESUME", filled: true)
         resume.onTap = { [weak self] in self?.closePanel(); self?.setPaused(false) }
@@ -190,17 +221,84 @@ final class GameViewController: UIViewController {
         }
         var subtitle = "TIME \(UI.time(result.time))  ·  BEST LAP \(UI.time(result.bestLap))"
         if result.isRecord { subtitle += "  ·  NEW RECORD" }
-        let again = GlowButton("RACE AGAIN", filled: true)
-        again.onTap = { [weak self] in self?.restart() }
-        let menu = GlowButton("MENU")
+        let money = onFinish?(result) ?? []
+        var buttons: [GlowButton] = []
+        if onRetry != nil || onFinish == nil {
+            let again = GlowButton(retryTitle, filled: true)
+            again.onTap = { [weak self] in
+                guard let self else { return }
+                if let pay = self.onRetry, !pay() {
+                    Toast.show("NOT ENOUGH CREDITS", in: self.view, color: UI.magenta)
+                    return
+                }
+                self.restart()
+            }
+            buttons.append(again)
+        }
+        let menu = GlowButton("CONTINUE", filled: buttons.isEmpty)
         menu.onTap = { [weak self] in self?.quit() }
+        buttons.append(menu)
         // Let the car cross the line on screen before the panel comes up.
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
             guard let self = self, self.panel == nil else { return }
             self.show(PanelView(title: UI.ordinal(result.position),
                                 titleColor: result.position == 1 ? UI.amber : .white,
-                                subtitle: subtitle, rows: rows, buttons: [again, menu]))
+                                subtitle: subtitle, rows: rows, money: money, buttons: buttons))
         }
+    }
+
+    // MARK: - Online results
+
+    /// Finished, but the order is the server's to call: show where things stand until it does.
+    private func showWaiting(_ result: RaceResult) {
+        heavy.impactOccurred()
+        controlsView.reset()
+        controlsView.isUserInteractionEnabled = false
+        pauseButton.isHidden = true
+        hud.setHintVisible(false)
+        hud.flash("FINISHED", color: UI.cyan, hold: 1.6)
+        hud.announce("TIME \(UI.time(result.time))  ·  WAITING FOR THE OTHERS", color: UI.cyan, hold: 30)
+    }
+
+    private func showOnlineResults(_ client: RaceClient) {
+        let results = client.results
+        let names = Dictionary(uniqueKeysWithValues: (config.online?.entries ?? []).map { ($0.id, $0.name) })
+        let mine = config.online?.entries.first?.id
+        let winner = results.first?.time
+        let rows = results.enumerated().map { i, r -> (left: String, right: String, highlight: Bool) in
+            let right: String
+            if let t = r.time { right = i == 0 || winner == nil ? UI.time(t) : String(format: "+%.2f", t - winner!) }
+            else { right = "DNF" }
+            return ("\(i + 1)  \(names[r.carID] ?? "DRIVER")", right, r.carID == mine)
+        }
+        let position = (results.firstIndex { $0.carID == mine } ?? results.count) + 1
+        let money = onOnlineResults?(results) ?? []
+        let back = GlowButton("BACK TO LOBBY", filled: true)
+        back.onTap = { [weak self] in
+            if client.isHost { client.returnToLobby() }
+            self?.quit()
+        }
+        closePanel()
+        hud.announce("", hold: 0)
+        show(PanelView(title: UI.ordinal(position), titleColor: position == 1 ? UI.amber : .white,
+                       subtitle: client.settings.stake > 0 ? "BUY-IN \(Economy.credits(client.settings.stake))" : "FRIENDLY RACE",
+                       rows: rows, money: money, buttons: [back]))
+    }
+
+    private func leaveOnline() {
+        hudTimer?.invalidate()
+        scnView.isPlaying = false
+        let leave = onLeave
+        dismiss(animated: true) { leave?() }
+    }
+
+    /// Called by the lobby when the connection drops mid-race.
+    func connectionLost(_ reason: String) {
+        guard isViewLoaded else { return }
+        closePanel()
+        let ok = GlowButton("OK", filled: true)
+        ok.onTap = { [weak self] in self?.leaveOnline() }
+        show(PanelView(title: "DISCONNECTED", subtitle: reason.uppercased(), buttons: [ok]))
     }
 
     private func show(_ newPanel: PanelView) {
@@ -243,13 +341,13 @@ final class GameViewController: UIViewController {
     }
 
     @objc private func appInactive() {
-        guard gameScene != nil else { return }
+        guard gameScene != nil, online == nil else { return }
         if panel == nil { pauseTapped() } else { setPaused(true) }
     }
 
     @objc private func appActive() {
         // Stays paused behind the panel until the player resumes; results keep running.
-        if gameScene != nil, pauseButton.isHidden { setPaused(false) }
+        if gameScene != nil, online == nil, pauseButton.isHidden { setPaused(false) }
     }
 
     override var supportedInterfaceOrientations: UIInterfaceOrientationMask { .portrait }

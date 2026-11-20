@@ -43,9 +43,11 @@ struct CarDesign {
     }
 
     let seed: UInt64
-    let name: String
+    var name: String
     let className: String
-    let spec: CarSpec
+    var spec: CarSpec
+    let garage: GarageBuild?
+    private let garageDimensions: GarageDimensions?
 
     let layout: Layout
     let length: Float
@@ -67,20 +69,46 @@ struct CarDesign {
     let glow: SIMD3<Float>
 
     /// Overall half-width including the tyres.
-    var halfWidth: Float { track + tyreWidth / 2 }
-    /// Distance from the centre to each axle.
-    var axle: Float { length * 0.31 }
+    var halfWidth: Float { max(track + tyreWidth / 2, garageDimensions?.bodyHalfWidth ?? 0) }
+    var axle: Float { garageDimensions?.axle ?? length * 0.31 }
+    var frontCollisionExtent: Float { garageDimensions?.frontExtent ?? length * 0.46 }
+    var rearCollisionExtent: Float { garageDimensions?.rearExtent ?? length * 0.46 }
+
+    init(garage: GarageBuild) {
+        let dimensions = GarageDimensions(garage)
+        self.garage = garage
+        garageDimensions = dimensions
+        seed = 0
+        name = "MY RACER"
+        className = (garage.part(at: .frame)?.title ?? "Sprint").uppercased() + " FRAME"
+        spec = dimensions.spec
+        layout = .wedge
+        length = dimensions.frontExtent + dimensions.rearExtent
+        width = dimensions.bodyWidth
+        height = dimensions.deckHeight
+        track = dimensions.track
+        frontRadius = dimensions.frontRadius
+        rearRadius = dimensions.rearRadius
+        tyreWidth = dimensions.tyreWidth
+        wing = 0
+        engineCount = 1
+        engineRadius = 0.20
+        primary = garage.paint(for: .frame).rgb
+        accent = garage.paint(for: .front).rgb
+        glow = SIMD3(0.28, 0.90, 1)
+    }
 
     /// `focus` picks the stat the car leans on, so a roster covers every style.
-    init(seed: UInt64, focus: Int, hue: Float) {
+    init(seed: UInt64, focus: Int, hue: Float, budget: Float = 2.3) {
         self.seed = seed
+        garage = nil
+        garageDimensions = nil
         var rng = SplitMix64(seed: seed &* 0x9E3779B97F4A7C15 &+ 0xD1B54A32)
 
         // Stats: random, pulled towards the focus, then scaled to a common budget.
         var raw = (0..<4).map { _ in rng.float(0.25...0.75) }
         raw[focus % 4] += rng.float(0.45...0.6)
         raw[(focus + 1 + Int.random(in: 0...2, using: &rng)) % 4] -= 0.12
-        let budget: Float = 2.3
         let sum = raw.reduce(0, +)
         var ratings = raw.map { max(0.12, min(1, $0 * budget / sum)) }
         // Whatever clipping lost goes back to the weakest stat.
