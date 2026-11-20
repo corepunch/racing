@@ -45,6 +45,9 @@ struct CarDesign {
     let seed: UInt64
     var name: String
     let className: String
+    /// Who built it: lettered on the bodywork, with the race number.
+    let maker: String
+    let number: Int
     var spec: CarSpec
     let garage: GarageBuild?
     private let garageDimensions: GarageDimensions?
@@ -80,7 +83,11 @@ struct CarDesign {
         garageDimensions = dimensions
         seed = 0
         name = "MY RACER"
-        className = (garage.part(at: .frame)?.title ?? "Sprint").uppercased() + " FRAME"
+        maker = (garage.part(at: .frame)?.title ?? "Sprint").uppercased()
+        className = maker + " FRAME"
+        // A number that belongs to the build: the same parts always carry the same one.
+        let parts = CarSlot.allCases.compactMap { garage.part(at: $0)?.rawValue }.joined()
+        number = 2 + parts.utf8.reduce(0) { ($0 &* 31 &+ Int($1)) % 98 }
         spec = dimensions.spec
         layout = .wedge
         length = dimensions.frontExtent + dimensions.rearExtent
@@ -141,7 +148,9 @@ struct CarDesign {
         let strongest = ratings.indices.max(by: { ratings[$0] < ratings[$1] }) ?? 0
         className = ["INTERCEPTOR", "DRAGSTER", "SLIDER", "BRUISER"][strongest]
         let range = Self.models[strongest]
-        name = "\(Self.makers[strongest]) \(range[Int.random(in: 0..<range.count, using: &rng)])"
+        maker = Self.makers[strongest]
+        name = "\(maker) \(range[Int.random(in: 0..<range.count, using: &rng)])"
+        number = Int.random(in: 2...99, using: &rng)
     }
 
     /// Who builds each class of car, in the order of `CarSpec.statNames`.

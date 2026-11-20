@@ -8,7 +8,7 @@ enum GarageMesh {
     private typealias Station = (z: Float, width: Float, bottom: Float, top: Float)
     private typealias Nozzle = (position: SIMD3<Float>, radius: Float)
 
-    static func build(_ build: GarageBuild, glow: SIMD3<Float>) -> CarModel {
+    static func build(_ build: GarageBuild, glow: SIMD3<Float>, markings: CarMesh.Markings? = nil) -> CarModel {
         let size = GarageDimensions(build)
         let car = SCNNode()
         let ground = SCNNode()
@@ -16,7 +16,7 @@ enum GarageMesh {
         car.addChildNode(ground)
 
         let chassis = build.part(at: .frame) ?? .sprint
-        let frame = makePart(chassis, size: size, paint: build.paint(for: .frame), on: chassis)
+        let frame = makePart(chassis, size: size, paint: build.paint(for: .frame), on: chassis, markings: markings)
         ground.addChildNode(frame)
         for slot in [CarSlot.front, .rear, .motor] {
             guard let part = build.part(at: slot) else { continue }
@@ -34,7 +34,8 @@ enum GarageMesh {
                 mount.simdPosition = addonMount(for: part)
                 node.addChildNode(mount)
                 if let addon = build.part(at: socket) {
-                    mount.addChildNode(makePart(addon, size: size, paint: build.paint(for: socket), on: chassis))
+                    mount.addChildNode(makePart(addon, size: size, paint: build.paint(for: socket), on: chassis,
+                                                markings: markings))
                 }
             }
         }
@@ -70,7 +71,7 @@ enum GarageMesh {
 
     /// `chassis` is the frame the part goes on: it sets the livery the bodywork shares.
     private static func makePart(_ part: CarPart, size: GarageDimensions, paint: GaragePaint,
-                                 on chassis: CarPart) -> SCNNode {
+                                 on chassis: CarPart, markings: CarMesh.Markings? = nil) -> SCNNode {
         var shell = Shell()
         // The nose and tail hang off the ends of the frame; their graphics carry on from it.
         var livery: Int?
@@ -81,12 +82,12 @@ enum GarageMesh {
         default: break
         }
         switch part.slot {
-        case .frame: frame(part, size: size, shell: &shell)
+        case .frame: frame(part, size: size, shell: &shell, number: markings.map { ($0.number, graphics(on: paint), paint.rgb) })
         case .front: front(part, shell: &shell)
         case .rear: rear(part, shell: &shell)
         case .motor: motor(part, shell: &shell)
         case .splitter: splitter(part, shell: &shell)
-        case .wing: wing(part, shell: &shell)
+        case .wing: wing(part, shell: &shell, name: markings.map { ($0.maker, graphics(on: paint)) })
         case .wheels: preconditionFailure("Wheel parts use their own rotating carrier")
         }
         return node(named: part.rawValue, shell: shell, paint: paint, livery: livery)
@@ -100,31 +101,41 @@ enum GarageMesh {
         }
     }
 
+    /// Graphics have to read on any paint: a deep shade of it when it is bright, white when it is dark.
+    private static func graphics(on paint: GaragePaint) -> SIMD3<Float> {
+        let color = paint.rgb
+        let bright = simd_dot(color, SIMD3<Float>(0.299, 0.587, 0.114)) > 0.45
+        return bright ? color * 0.16 + SIMD3<Float>(0.02, 0.03, 0.05) : SIMD3<Float>(0.93, 0.95, 0.98)
+    }
+
     private static func node(named name: String, shell: Shell, paint: GaragePaint, detailed: Bool = true,
                              livery: Int? = nil) -> SCNNode {
         let color = paint.rgb
-        // Graphics have to read on any paint: a deep shade of it when it is bright, white when it is dark.
-        let bright = simd_dot(color, SIMD3<Float>(0.299, 0.587, 0.114)) > 0.45
-        let graphics = bright ? color * 0.16 + SIMD3<Float>(0.02, 0.03, 0.05) : SIMD3<Float>(0.93, 0.95, 0.98)
+        let graphics = graphics(on: paint)
         let trim = color * 0.67 + SIMD3<Float>(0.22, 0.25, 0.28)
         let light: SIMD3<Float> = name == CarPart.cutTail.rawValue || name == CarPart.flightDeck.rawValue
             || name == CarPart.twinTail.rawValue ? SIMD3(1, 0.13, 0.37) : SIMD3(0.27, 0.87, 1)
         let materials = CarMesh.materials(paint: color, accent: trim, light: light, detailed: detailed,
                                           livery: livery.map { (graphics, $0) })
-        let result = SCNNode(geometry: shell.geometry(materials: materials))
+        let result = shell.node(materials: materials)
         result.name = name
         return result
     }
 
+    /// Lofts a body through `stations` and hands back its rings, for anything laid on its faces.
+    @discardableResult
     private static func panel(_ shell: inout Shell, _ slot: Slot, x: Float = 0,
-                              roof: Float = 0.74, _ stations: [Station]) {
-        shell.loft(slot, stations.map {
+                              roof: Float = 0.74, _ stations: [Station]) -> [[SIMD3<Float>]] {
+        let rings = stations.map {
             CarMesh.section(x: x, z: $0.z, halfWidth: $0.width, top: $0.top, bottom: $0.bottom,
                             chine: 0.43, roof: roof)
-        })
+        }
+        shell.loft(slot, rings)
+        return rings
     }
 
-    private static func frame(_ part: CarPart, size: GarageDimensions, shell: inout Shell) {
+    private static func frame(_ part: CarPart, size: GarageDimensions, shell: inout Shell,
+                              number: (Int, ink: SIMD3<Float>, paint: SIMD3<Float>)? = nil) {
         let w = size.bodyWidth, h = size.deckHeight, end = size.end
         panel(&shell, .metal, roof: 0.91, [
             (-end - 0.05, w * 0.61, 0.25, 0.39), (-end * 0.64, w, 0.24, 0.41),
@@ -132,11 +143,18 @@ enum GarageMesh {
         ])
 
         let core = part == .atlas ? w * 0.65 : w
-        panel(&shell, .paint, roof: part == .sprint ? 0.49 : 0.69, [
+        let hull = panel(&shell, .paint, roof: part == .sprint ? 0.49 : 0.69, [
             (-end - 0.06, core * 0.47, 0.31, h * 0.89), (-end * 0.56, core * 0.88, 0.33, h + 0.05),
             (-end * 0.12, core, 0.33, h + 0.13), (end * 0.34, core * 0.91, 0.33, h + 0.06),
             (end + 0.05, core * 0.61, 0.32, h),
         ])
+        // The race number on its board, on the bonnet ahead of the canopy.
+        if let (number, ink, paint) = number {
+            let bonnet = CarMesh.Face.roof(hull[0], hull[1])
+            shell.decal(String(number), color: paint, plate: ink, centre: bonnet.centre - SIMD3(0, 0, 0.03),
+                        normal: bonnet.normal, up: SIMD3(0, 0, -1), height: min(0.3, bonnet.length * 0.5),
+                        maxWidth: bonnet.rise * 0.85)
+        }
 
         if part != .sprint {
             for side: Float in [-1, 1] {
@@ -273,7 +291,9 @@ enum GarageMesh {
         }
     }
 
-    private static func wing(_ part: CarPart, shell: inout Shell) {
+    private static func wing(_ part: CarPart, shell: inout Shell, name: (String, SIMD3<Float>)? = nil) {
+        // A wing is a lettering surface: no seams under the name.
+        shell.plain = true
         let high: Float = part == .doubleDeck ? 0.79 : 0.46
         let span: Float = part == .doubleDeck ? 1.23 : 0.99
         for side: Float in [-1, 1] {
@@ -283,10 +303,16 @@ enum GarageMesh {
             shell.box(.accent, centre: SIMD3(side * span, high - 0.055, 0.18),
                       size: SIMD3(0.075, 0.23, 0.46))
         }
-        panel(&shell, .paint, roof: 1, [
+        let blade = panel(&shell, .paint, roof: 1, [
             (-0.11, span * 0.82, high, high + 0.07), (0.05, span, high + 0.015, high + 0.09),
             (0.40, span * 0.92, high + 0.041, high + 0.07),
         ])
+        // The frame's name across the wing, where the chasing pack reads it.
+        if let (name, ink) = name {
+            let top = CarMesh.Face.roof(blade[1], blade[2])
+            shell.decal(name, color: ink, centre: top.centre, normal: top.normal, up: SIMD3(0, 0, -1),
+                        height: top.length * 0.62, maxWidth: top.rise * 0.7)
+        }
         if part == .doubleDeck {
             panel(&shell, .paint, roof: 1, [
                 (-0.04, 0.74, 0.34, 0.41), (0.12, 0.93, 0.35, 0.43), (0.36, 0.84, 0.36, 0.42),

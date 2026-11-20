@@ -551,6 +551,8 @@ enum ProceduralTextures {
     static let carTile = SIMD2<Float>(4, 2)
     /// Where a flank at road height sits across the texture, in metres.
     static let carFlank: Float = 1.1
+    /// A spot on a deck with nothing on it in any texture: surfaces mapped here stay clean for lettering.
+    static let carBlank = SIMD2<Float>(0.5, 0.75)
 
     /// Metres from the centre line (0...2) and along the car (0..<2) for a texture coordinate.
     @inline(__always) private static func carSpace(_ u: Float, _ v: Float) -> (a: Float, z: Float) {
@@ -661,6 +663,54 @@ enum ProceduralTextures {
             let cut = stripes(s, pitch: 1.0, fill: 0.08) + stripes(s - 0.13, pitch: 1.0, fill: 0.08)
             return max(band(a - 0.32, 0.03, aa), flank * (1 - min(cut, 1)))
         }
+    }
+
+    /// A piece of lettering ready to lay on a car: the image and its width over its height.
+    final class Lettering {
+        let image: UIImage
+        let aspect: Float
+        init(image: UIImage, aspect: Float) { self.image = image; self.aspect = aspect }
+    }
+
+    private static let letterings = NSCache<NSString, Lettering>()
+
+    /// Stencil lettering for a car decal, in the track signage's hand. On its own it is `color`
+    /// on clear; with a `plate` it sits on a rounded board of that colour, as race numbers do.
+    static func lettering(_ text: String, color: SIMD3<Float>, plate: SIMD3<Float>? = nil) -> Lettering {
+        let key = "\(text)-\(color)-\(String(describing: plate))" as NSString
+        if let made = letterings.object(forKey: key) { return made }
+        let mask = TextMask(text, height: 96)
+        let pad = plate == nil ? 0 : mask.height / 3
+        let w = mask.width + 2 * pad, h = mask.height + 2 * pad
+        let radius = Float(h) * 0.24
+        var pixels = [UInt8](repeating: 0, count: w * h * 4)
+        for y in 0..<h {
+            for x in 0..<w {
+                let ink = mask.sample((Float(x - pad) + 0.5) / Float(mask.width),
+                                      1 - (Float(y - pad) + 0.5) / Float(mask.height))
+                var rgb = color, alpha = ink
+                if let plate {
+                    let qx = abs(Float(x) + 0.5 - Float(w) / 2) - (Float(w) / 2 - radius)
+                    let qy = abs(Float(y) + 0.5 - Float(h) / 2) - (Float(h) / 2 - radius)
+                    let edge = sqrt(max(qx, 0) * max(qx, 0) + max(qy, 0) * max(qy, 0)) + min(max(qx, qy), 0) - radius
+                    alpha = 1 - smoothstep(-1, 1, edge)
+                    rgb = simd_mix(plate, color, SIMD3(repeating: ink))
+                }
+                // Premultiplied, so the clear surround never bleeds a fringe into the edge.
+                let v = simd_clamp(rgb * alpha, .zero, SIMD3(repeating: 1)) * 255
+                let i = (y * w + x) * 4
+                pixels[i] = UInt8(v.x); pixels[i + 1] = UInt8(v.y); pixels[i + 2] = UInt8(v.z)
+                pixels[i + 3] = UInt8(min(max(alpha, 0), 1) * 255)
+            }
+        }
+        let cg = CGImage(width: w, height: h, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: w * 4,
+                         space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                         bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
+                         provider: CGDataProvider(data: Data(pixels) as CFData)!, decode: nil,
+                         shouldInterpolate: true, intent: .defaultIntent)!
+        let made = Lettering(image: UIImage(cgImage: cg), aspect: Float(w) / Float(h))
+        letterings.setObject(made, forKey: key)
+        return made
     }
 
     /// One block of tyre tread: u once per block round the wheel, v across the tread.

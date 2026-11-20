@@ -20,20 +20,73 @@ enum CarMesh {
 
     enum Slot: Int, CaseIterable { case paint, accent, metal, glass, glow }
 
+    /// What a car carries in lettering: its maker's name and its race number.
+    struct Markings {
+        let maker: String
+        let number: Int
+    }
+
     /// Flat-shaded faces that always wind outward from a reference point.
     struct Shell {
         var mesh = MeshBuilder(materialCount: Slot.allCases.count)
         /// Where this shell sits on the car, so textures run on from one part to the next.
         var origin = SIMD3<Float>.zero
+        /// Surfaces added while this is set take no seams or graphics: they are for lettering.
+        var plain = false
         /// Replaces the bodywork projection: texture coordinates for a point, given its face's
         /// normal and centre.
         var mapping: ((_ p: SIMD3<Float>, _ n: SIMD3<Float>, _ centre: SIMD3<Float>) -> SIMD2<Float>)?
+
+        /// Lettering laid over the bodywork: the image and the corners it is stretched between,
+        /// from top left round by top right.
+        private var decals: [(image: UIImage, corners: [SIMD3<Float>], normal: SIMD3<Float>)] = []
 
         /// The finished surface: gentle bends shade as curves, edges sharper than 37° stay crisp.
         func geometry(materials: [SCNMaterial]) -> SCNGeometry {
             var smooth = mesh
             smooth.smoothNormals()
             return smooth.geometry(materials: materials)
+        }
+
+        /// The surface with its lettering on top.
+        func node(materials: [SCNMaterial]) -> SCNNode {
+            let node = SCNNode(geometry: geometry(materials: materials))
+            for decal in decals {
+                var quad = MeshBuilder(materialCount: 1)
+                let uvs: [SIMD2<Float>] = [SIMD2(0, 0), SIMD2(1, 0), SIMD2(1, 1), SIMD2(0, 1)]
+                let i = zip(decal.corners, uvs).map { quad.vertex($0, decal.normal, $1) }
+                quad.triangle(0, i[0], i[3], i[2])
+                quad.triangle(0, i[0], i[2], i[1])
+                // Painted on under the same lacquer as the bodywork.
+                let m = SCNMaterial()
+                m.lightingModel = .physicallyBased
+                m.diffuse.contents = decal.image
+                m.diffuse.mipFilter = .linear
+                m.diffuse.maxAnisotropy = 8
+                m.metalness.contents = 0.5
+                m.roughness.contents = 0.34
+                m.clearCoat.contents = 1.0
+                m.clearCoatRoughness.contents = 0.18
+                m.writesToDepthBuffer = false
+                let child = SCNNode(geometry: quad.geometry(materials: [m]))
+                child.castsShadow = false
+                node.addChildNode(child)
+            }
+            return node
+        }
+
+        /// Lays lettering on a flat face: centred at `centre`, facing along `normal`, its top
+        /// towards `up`. It is `height` tall unless that would make it wider than `maxWidth`.
+        mutating func decal(_ text: String, color: SIMD3<Float>, plate: SIMD3<Float>? = nil, centre: SIMD3<Float>,
+                            normal: SIMD3<Float>, up: SIMD3<Float>, height: Float, maxWidth: Float) {
+            let lettering = ProceduralTextures.lettering(text, color: color, plate: plate)
+            let h = min(height, maxWidth / lettering.aspect), w = h * lettering.aspect
+            let n = simd_normalize(normal)
+            let right = simd_normalize(simd_cross(up, n)) * (w / 2)
+            let top = simd_cross(n, simd_normalize(right)) * (h / 2)
+            // Clear of the surface by less than anyone can see, and by more than the depth buffer can confuse.
+            let c = centre + n * 0.006
+            decals.append((lettering.image, [c - right + top, c + right + top, c + right - top, c - right - top], n))
         }
 
         mutating func tri(_ slot: Slot, _ a: SIMD3<Float>, _ b: SIMD3<Float>, _ c: SIMD3<Float>, from o: SIMD3<Float>) {
@@ -44,7 +97,9 @@ enum CarMesh {
             let outward = simd_dot(n, (a + b + c) / 3 - o) >= 0
             if !outward { n = -n }
             let centre = (a + b + c) / 3
-            func map(_ p: SIMD3<Float>) -> SIMD2<Float> { mapping?(p, n, centre) ?? uv(p, n) }
+            func map(_ p: SIMD3<Float>) -> SIMD2<Float> {
+                plain ? ProceduralTextures.carBlank : mapping?(p, n, centre) ?? uv(p, n)
+            }
             let i0 = mesh.vertex(a, n, map(a)), i1 = mesh.vertex(b, n, map(b)), i2 = mesh.vertex(c, n, map(c))
             if outward { mesh.triangle(slot.rawValue, i0, i1, i2) } else { mesh.triangle(slot.rawValue, i0, i2, i1) }
         }
@@ -123,8 +178,37 @@ enum CarMesh {
         }
     }
 
+    /// One flat-ish face of a lofted body: its middle, the way it faces, and its size in the
+    /// direction rings follow one another (`length`) and round the ring (`rise`).
+    struct Face {
+        let centre: SIMD3<Float>
+        let normal: SIMD3<Float>
+        let length: Float
+        let rise: Float
+
+        /// The face between points `i` and `j` of ring `a` and the same two of ring `b`.
+        init(_ a: [SIMD3<Float>], _ b: [SIMD3<Float>], _ i: Int, _ j: Int) {
+            centre = (a[i] + a[j] + b[i] + b[j]) / 4
+            let middleA: SIMD3<Float> = a.reduce(.zero, +) / Float(a.count)
+            let middleB: SIMD3<Float> = b.reduce(.zero, +) / Float(b.count)
+            let inside = (middleA + middleB) / 2
+            let n = simd_normalize(simd_cross(b[j] - a[i], b[i] - a[j]))
+            normal = simd_dot(n, centre - inside) < 0 ? -n : n
+            length = simd_distance((a[i] + a[j]) / 2, (b[i] + b[j]) / 2)
+            rise = (simd_distance(a[i], a[j]) + simd_distance(b[i], b[j])) / 2
+        }
+
+        /// The roof of a `section` body between two rings.
+        static func roof(_ a: [SIMD3<Float>], _ b: [SIMD3<Float>]) -> Face { Face(a, b, 0, 1) }
+        /// Its outward shoulder, between roof and chine, on the left (-1) or right (+1).
+        static func shoulder(_ a: [SIMD3<Float>], _ b: [SIMD3<Float>], side: Float) -> Face {
+            side > 0 ? Face(a, b, 1, 2) : Face(a, b, 0, 5)
+        }
+    }
+
     static func build(_ design: CarDesign) -> CarModel {
-        if let garage = design.garage { return GarageMesh.build(garage, glow: design.glow) }
+        let markings = Markings(maker: design.maker, number: design.number)
+        if let garage = design.garage { return GarageMesh.build(garage, glow: design.glow, markings: markings) }
         var shell = Shell()
         let L = design.length, W = design.width, H = design.height
         let noseZ = -L / 2, tailZ = L / 2
@@ -132,39 +216,64 @@ enum CarMesh {
             (0, 0.14, 0.2), (0.16, 0.4, 0.38), (0.4, 0.82, 0.8), (0.55, 1, 1), (0.8, 0.92, 0.82), (1, 0.72, 0.55),
         ]
 
-        // Bodywork, and where the suspension arms, canopy and exhausts attach.
+        // Bodywork, and where the suspension arms, canopy and exhausts attach. Each layout wears
+        // its maker's name along both flanks, and its number on the nose where there is room.
         var armX: Float
         var canopy: (z: Float, width: Float, base: Float)
+        let primary = design.primary, accent = design.accent
+        func wordmark(_ a: [SIMD3<Float>], _ b: [SIMD3<Float>], side: Float, on surface: SIMD3<Float>) {
+            let face = Face.shoulder(a, b, side: side)
+            let board = surface == primary ? accent : primary
+            shell.decal(design.maker, color: legible(surface, on: board), plate: board, centre: face.centre, normal: face.normal,
+                        up: SIMD3(0, 1, 0), height: face.rise * 0.66, maxWidth: face.length * 0.85)
+        }
+        func nose(_ a: [SIMD3<Float>], _ b: [SIMD3<Float>]) {
+            let face = Face.roof(a, b)
+            guard face.rise >= 0.3 else { return }
+            shell.decal(String(design.number), color: legible(primary, on: accent), plate: accent, centre: face.centre,
+                        normal: face.normal,
+                        up: SIMD3(0, 0, -1), height: min(0.34, face.length * 0.6), maxWidth: face.rise * 0.8)
+        }
         switch design.layout {
         case .formula:
             let core = W * 0.6
-            shell.loft(.paint, body(from: noseZ, to: tailZ, width: core, height: H, tub))
+            let rings = body(from: noseZ, to: tailZ, width: core, height: H, tub)
+            shell.loft(.paint, rings)
+            nose(rings[1], rings[2])
             for side: Float in [-1, 1] {
-                shell.loft(.accent, body(x: side * (core + W * 0.2), from: -L * 0.1, to: L * 0.34, width: W * 0.36,
-                                         height: H * 0.62, [(0, 0.5, 0.5), (0.25, 1, 1), (0.8, 1, 0.9), (1, 0.6, 0.6)]))
+                let pod = body(x: side * (core + W * 0.2), from: -L * 0.1, to: L * 0.34, width: W * 0.36,
+                               height: H * 0.62, [(0, 0.5, 0.5), (0.25, 1, 1), (0.8, 1, 0.9), (1, 0.6, 0.6)])
+                shell.loft(.accent, pod)
+                wordmark(pod[1], pod[2], side: side, on: accent)
             }
             armX = core * 0.8
             canopy = (L * 0.02, core * 0.62, H * 0.93)
         case .wedge:
-            shell.loft(.paint, body(from: noseZ, to: tailZ, width: W, height: H, [
+            let rings = body(from: noseZ, to: tailZ, width: W, height: H, [
                 (0, 0.6, 0.12), (0.22, 0.9, 0.34), (0.5, 1, 0.92), (0.78, 1, 0.9), (1, 0.9, 0.62),
-            ], roof: 0.55))
+            ], roof: 0.55)
+            shell.loft(.paint, rings)
+            nose(rings[0], rings[1])
             // Side skirts.
             for side: Float in [-1, 1] {
                 shell.box(.accent, centre: SIMD3(side * W, clearance + 0.09, L * 0.04), size: SIMD3(0.08, 0.14, L * 0.36))
+                wordmark(rings[2], rings[3], side: side, on: primary)
             }
             armX = W * 0.85
             canopy = (L * 0.04, W * 0.5, H * 0.9)
         case .twin:
             let offset = W * 0.68
             for side: Float in [-1, 1] {
-                shell.loft(.paint, body(x: side * offset, from: noseZ, to: tailZ, width: W * 0.3, height: H * 0.62, [
+                let boom = body(x: side * offset, from: noseZ, to: tailZ, width: W * 0.3, height: H * 0.62, [
                     (0, 0.3, 0.3), (0.2, 0.8, 0.7), (0.5, 1, 1), (0.8, 1, 0.9), (1, 0.8, 0.7),
-                ]))
+                ])
+                shell.loft(.paint, boom)
+                wordmark(boom[2], boom[3], side: side, on: primary)
             }
-            shell.loft(.accent, body(from: -L * 0.16, to: L * 0.42, width: W * 0.46, height: H, [
+            let pod = body(from: -L * 0.16, to: L * 0.42, width: W * 0.46, height: H, [
                 (0, 0.3, 0.45), (0.3, 0.9, 0.95), (0.6, 1, 1), (1, 0.75, 0.6),
-            ]))
+            ])
+            shell.loft(.accent, pod)
             // Deck tying the three together.
             shell.loft(.metal, [
                 section(z: -L * 0.12, halfWidth: offset, top: clearance + 0.2, chine: 0.5, roof: 0.9),
@@ -197,15 +306,23 @@ enum CarMesh {
         let rearChord = 0.36 + 0.3 * design.wing
         let wingY = H + 0.2 + 0.22 * design.wing
         let wingZ = tailZ - 0.1
+        // The maker's name across the wing, where the chasing pack reads it, and the number on each end plate.
+        shell.plain = true
         shell.box(.accent, centre: SIMD3(0, wingY, wingZ), size: SIMD3(rearSpan * 2, 0.06, rearChord))
+        shell.decal(design.maker, color: legible(primary, on: accent), centre: SIMD3(0, wingY + 0.03, wingZ), normal: SIMD3(0, 1, 0),
+                    up: SIMD3(0, 0, -1), height: rearChord * 0.6, maxWidth: rearSpan * 1.5)
         for side: Float in [-1, 1] {
             shell.box(.paint, centre: SIMD3(side * rearSpan, wingY - 0.06, wingZ), size: SIMD3(0.05, 0.3, rearChord + 0.12))
+            shell.decal(String(design.number), color: legible(accent, on: primary),
+                        centre: SIMD3(side * (rearSpan + 0.025), wingY - 0.06, wingZ),
+                        normal: SIMD3(side, 0, 0), up: SIMD3(0, 1, 0), height: 0.2, maxWidth: rearChord)
             let strutX = side * min(W * 0.5, rearSpan * 0.5)
             shell.slab(.metal,
                        root: (SIMD3(strutX, H * 0.6, wingZ - 0.35), SIMD3(strutX, H * 0.6, wingZ - 0.05)),
                        tip: (SIMD3(strutX, wingY, wingZ - 0.12), SIMD3(strutX, wingY, wingZ + 0.1)),
                        thickness: SIMD3(0.03, 0, 0))
         }
+        shell.plain = false
 
         // Wheels and the arms that carry them.
         let places: [(x: Float, z: Float, r: Float)] = [
@@ -249,7 +366,7 @@ enum CarMesh {
         let chassis = SCNNode()
         // Everything above was modelled with the road at y = 0.
         let lower = SIMD3<Float>(0, -axleHeight, 0)
-        let hull = SCNNode(geometry: shell.geometry(materials: mats))
+        let hull = shell.node(materials: mats)
         hull.name = "hull"
         hull.simdPosition = lower
         chassis.addChildNode(hull)
@@ -348,6 +465,14 @@ enum CarMesh {
             let girth = 0.75 + 0.3 * min(amount, 1.6)
             for flame in flames.childNodes { flame.simdScale = SIMD3(girth, length, girth) }
         }
+    }
+
+    /// `ink` if it stands out on `surface`; otherwise white on a dark surface or a deep shade of
+    /// a bright one, so lettering reads on any pair of team colours.
+    static func legible(_ ink: SIMD3<Float>, on surface: SIMD3<Float>) -> SIMD3<Float> {
+        func light(_ c: SIMD3<Float>) -> Float { simd_dot(c, SIMD3(0.299, 0.587, 0.114)) }
+        if abs(light(ink) - light(surface)) >= 0.25 { return ink }
+        return light(surface) > 0.5 ? surface * 0.16 + SIMD3(0.02, 0.03, 0.05) : SIMD3(0.93, 0.95, 0.98)
     }
 
     static func color(_ c: SIMD3<Float>) -> UIColor {
