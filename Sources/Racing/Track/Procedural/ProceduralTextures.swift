@@ -287,6 +287,8 @@ enum ProceduralTextures {
         case .chevrons, .bands: label = nil
         }
         let cream = SIMD3<Float>(0.86, 0.83, 0.74)
+        // Lane lines are light strips, bright enough to bloom even where distance thins them out.
+        let laneGlow: Float = 1.0
         return bake(width: 1024, height: 1024) { u, v in
             let pm = SIMD2(u * 16, v * 16)     // metres
             let x = u * 2 - 1
@@ -324,20 +326,23 @@ enum ProceduralTextures {
                     let tooth = 1 - abs(fract(v * 4) * 2 - 1)
                     let tri = 1 - smoothstep(-0.03, 0.03, e - tooth * 0.95)
                     t.paint(cream, tri * (0.45 + wearMask * 0.5))
+                    // Lit edge line along the teeth's inner tips.
+                    t.glow(cream * laneGlow, band(e - 1.02, 0.025, 0.015) * wearMask)
                 case .kerb:
                     // Racing kerb: long alternating blocks, then a thin line.
                     let block = fract(v * 4) < 0.5
                     let kerb = (1 - smoothstep(0.6, 0.66, e)) * band(fract(v * 8) - 0.5, 0.47, 0.02)
                     t.paint(block ? theme.paint : cream, kerb * (0.55 + wearMask * 0.45))
                     t.height += kerb * 0.12 * (0.5 + 0.5 * sin(v * 64 * .pi))
-                    t.paint(cream, band(e - 0.95, 0.06, 0.03) * wearMask)
+                    // The edge line is a light strip.
+                    t.glow(cream * laneGlow, band(e - 0.95, 0.06, 0.03) * wearMask)
                 }
             }
 
             switch pattern {
             case .plain:
                 let dash = band(fract(v * 4) - 0.5, 0.25, aa * 4) * band(x, 0.01, aa * 2)
-                t.paint(cream, dash * wearMask * 0.8)
+                t.glow(cream * laneGlow, dash * wearMask * 0.8)
                 t.paint(white, label!.coverage(pm, center: SIMD2(12.2, 2.6), size: 0.42) * wearMask)
 
             case .chevrons:
