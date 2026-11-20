@@ -225,7 +225,7 @@ enum TrackMeshBuilder {
 
         var materials = DeckPattern.allCases.map {
             ProceduralTextures.deck($0, theme: theme, seed: seed &+ UInt64($0.rawValue))
-                .material(name: "deck-\($0)", glow: 1.8)
+                .material(name: "deck-\($0)", glow: 3.2)
         }
         materials += WallPattern.allCases.map {
             ProceduralTextures.wall($0, theme: theme, seed: seed &+ 40 &+ UInt64($0.rawValue),
@@ -245,7 +245,7 @@ enum TrackMeshBuilder {
         materials.append(ProceduralTextures.tunnelWall(theme: theme, seed: seed &+ 62)
             .material(name: "tunnel-wall", glow: 2.2))
         materials.append(ProceduralTextures.tunnelLight(theme: theme, seed: seed &+ 63)
-            .material(name: "tunnel-light", glow: 2.6))
+            .material(name: "tunnel-light", glow: 3.2))
 
         let node = SCNNode(geometry: mesh.geometry(materials: materials, skipping: [barrierSlot]))
         node.name = "trackMesh"

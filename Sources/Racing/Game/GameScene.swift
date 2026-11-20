@@ -316,10 +316,10 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
         camera.wantsHDR = true
         camera.wantsExposureAdaptation = false
         camera.motionBlurIntensity = 0
-        camera.bloomIntensity = 0.45
-        // Above anything sunlit or skylit: only emitters (neon at 1.5 and up, car glow) bloom.
-        camera.bloomThreshold = 1.4
-        camera.bloomBlurRadius = 10
+        camera.bloomIntensity = 0.7
+        // Neon (emission 1.5+) clears this; car bodies don't emit, so lit paint stays under it.
+        camera.bloomThreshold = 1.0
+        camera.bloomBlurRadius = 12
 
         cameraNode           = SCNNode()
         cameraNode.camera    = camera

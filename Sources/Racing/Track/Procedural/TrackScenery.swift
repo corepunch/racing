@@ -42,12 +42,12 @@ enum CityScenery {
             property.contentsTransform = SCNMatrix4MakeScale(1 / 8, 1 / 8, 1)   // box UVs are in metres
         }
         materials.append(hull)
-        materials.append(TrackMeshBuilder.neon(theme.neonA, intensity: 1.8))
-        materials.append(TrackMeshBuilder.neon(theme.neonB, intensity: 1.8))
+        materials.append(TrackMeshBuilder.neon(theme.neonA, intensity: 3.2))
+        materials.append(TrackMeshBuilder.neon(theme.neonB, intensity: 3.2))
         materials.append(ProceduralTextures.cityFloor(theme: theme, seed: seed &+ 80)
             .material(name: "city-floor", tile: SIMD2(800, 800), glow: 1.5))
         materials.append(TrackMeshBuilder.neon(theme.window, intensity: 2))
-        let arrow = TrackMeshBuilder.neon(SIMD3(1.0, 0.62, 0.08), intensity: 1.7)
+        let arrow = TrackMeshBuilder.neon(SIMD3(1.0, 0.62, 0.08), intensity: 3.0)
         arrow.isDoubleSided = true
         materials.append(arrow)
 
