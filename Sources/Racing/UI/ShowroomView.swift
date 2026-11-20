@@ -7,7 +7,7 @@ import UIKit
 /// edges, so it is obvious there is more to swipe to.
 final class ShowroomView: SCNView, UIGestureRecognizerDelegate {
     /// Metres between podiums.
-    private let spacing: Float = 5.9
+    private let spacing: Float = 5.4
 
     private let rig = SCNNode()
     private let cameraNode = SCNNode()
@@ -39,10 +39,12 @@ final class ShowroomView: SCNView, UIGestureRecognizerDelegate {
         scene.background.contents = Self.wash
         // The floor fades into the wash before its horizon, so there's no seam.
         scene.fogColor = UIColor(red: 0.045, green: 0.06, blue: 0.11, alpha: 1)
-        scene.fogStartDistance = 14
-        scene.fogEndDistance = 30
-        scene.lightingEnvironment.contents = Self.studio
-        scene.lightingEnvironment.intensity = 1.05
+        scene.fogStartDistance = 17
+        scene.fogEndDistance = 34
+        // The studio fills the shadows and puts reflections in the paint; the key light below
+        // does the lighting, so each car has a bright side, a dark side and a shadow.
+        scene.lightingEnvironment.contents = ProceduralTextures.studio
+        scene.lightingEnvironment.intensity = 0.6
         self.scene = scene
 
         let floor = SCNFloor()
@@ -54,7 +56,7 @@ final class ShowroomView: SCNView, UIGestureRecognizerDelegate {
         floorNode.position.y = -0.05
         scene.rootNode.addChildNode(floorNode)
 
-        for (color, intensity, angles) in [(UIColor.white, 700.0, SCNVector3(-0.85, 0.55, 0)),
+        for (color, intensity, angles) in [(UIColor.white, 1200.0, SCNVector3(-0.85, 0.55, 0)),
                                            (UIColor(red: 0.35, green: 0.7, blue: 1, alpha: 1), 420.0, SCNVector3(-0.3, 2.6, 0))] {
             let light = SCNNode()
             light.light = SCNLight()
@@ -64,11 +66,20 @@ final class ShowroomView: SCNView, UIGestureRecognizerDelegate {
             light.eulerAngles = angles
             rig.addChildNode(light)
         }
+        // The key light grounds each car on its podium.
+        if let key = rig.childNodes.first?.light {
+            key.castsShadow = true
+            key.shadowMode = .forward
+            key.shadowMapSize = CGSize(width: 2048, height: 2048)
+            key.shadowSampleCount = 16
+            key.shadowRadius = 4
+            key.shadowColor = UIColor(white: 0, alpha: 0.6)
+        }
 
         cameraNode.camera = SCNCamera()
         // Frame by width, so a tall showroom doesn't zoom in and hide the neighbours.
         cameraNode.camera?.projectionDirection = .horizontal
-        cameraNode.camera?.fieldOfView = 46
+        cameraNode.camera?.fieldOfView = 30
         cameraNode.camera?.zNear = 0.5
         cameraNode.camera?.zFar = 80
         cameraNode.camera?.wantsHDR = true
@@ -78,7 +89,9 @@ final class ShowroomView: SCNView, UIGestureRecognizerDelegate {
         cameraNode.camera?.bloomBlurRadius = 8
         cameraNode.camera?.vignettingIntensity = 0.6
         cameraNode.camera?.vignettingPower = 0.8
-        cameraNode.position = SCNVector3(0, 4.4, 10)
+        // A long lens from well back: the car fills the view without its near end ballooning
+        // as it turns, and a sliver of each neighbour still shows.
+        cameraNode.position = SCNVector3(0, 4.56, 10.42)
         cameraNode.look(at: SCNVector3(0, 0.45, 0))
         rig.addChildNode(cameraNode)
         scene.rootNode.addChildNode(rig)
@@ -152,12 +165,20 @@ final class ShowroomView: SCNView, UIGestureRecognizerDelegate {
         let car = CarMesh.build(design).node
         CarMesh.setThrust(0.12, on: car)
         car.simdPosition = SIMD3(0, 0.26 + CarMesh.axleHeight, 0)
-        // Big cars are scaled down a little so every one fits its podium.
-        let span = max(design.frontCollisionExtent + design.rearCollisionExtent, design.halfWidth * 2)
-        car.simdScale = SIMD3(repeating: min(1, 4.9 / span))
+        // Every car is sized to its podium: big ones shrink a little, small ones grow a little.
+        car.simdScale = SIMD3(repeating: min(1.3, 2.5 / Self.footprint(of: car)))
         turntables[i].addChildNode(car)
         cars[i] = car
         accessibilityValue = design.name
+    }
+
+    /// Radius of the circle the car sweeps as it turns on its podium, exhaust plumes aside.
+    private static func footprint(of car: SCNNode) -> Float {
+        let flames = car.childNode(withName: "flames", recursively: false)
+        flames?.removeFromParentNode()
+        defer { flames.map(car.addChildNode) }
+        let (low, high) = car.boundingBox
+        return simd_length(SIMD2(max(-low.x, high.x), max(-low.z, high.z)))
     }
 
     func scroll(to i: Int, animated: Bool) {
@@ -298,12 +319,6 @@ final class ShowroomView: SCNView, UIGestureRecognizerDelegate {
                       UIColor(red: 0.035, green: 0.045, blue: 0.08, alpha: 1).cgColor]
         let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: colors as CFArray, locations: [0, 1])!
         ctx.cgContext.drawLinearGradient(gradient, start: .zero, end: CGPoint(x: 0, y: 256), options: [])
-    }
-
-    private static let studio = ProceduralTextures.image(width: 64, height: 32) { _, v in
-        let top = smoothstep(0.4, 0, v)
-        let horizon = exp(-pow((v - 0.5) * 9, 2))
-        return SIMD3(0.9, 0.95, 1) * top * 1.3 + SIMD3(0.1, 0.45, 0.9) * horizon * 0.7 + SIMD3(0.02, 0.02, 0.05)
     }
 
     private static func podium() -> SCNNode {

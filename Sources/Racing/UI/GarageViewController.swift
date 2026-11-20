@@ -522,24 +522,18 @@ private final class GarageStudio: SCNView {
 
     private func placeCamera() {
         let aspect = Float(bounds.width / max(bounds.height, 1))
-        cameraNode.camera?.orthographicScale = Double(span * max(1.07, 1.15 / max(0.15, aspect)))
+        // The car is as wide as the view when it sits side-on, with room to stand end-on.
+        cameraNode.camera?.orthographicScale = Double(span * max(0.8, 1 / max(0.15, aspect)))
         cameraNode.simdPosition = SIMD3(sin(angle) * 9, 5.5, cos(angle) * 9)
         cameraNode.simdLook(at: SIMD3(0, 0.55, 0))
     }
 
-    private static let studioLight = ProceduralTextures.image(width: 64, height: 32) { _, v in
-        let top = smoothstep(0.53, 0.05, v)
-        let horizon = exp(-pow((v - 0.52) * 8, 2))
-        return SIMD3(0.9, 0.96, 1) * top * 1.3 + SIMD3(0.20, 0.44, 0.67) * horizon * 0.68
-            + SIMD3(0.06, 0.09, 0.14)
-    }
-
     private static func makeScene() -> SCNScene {
         let scene = SCNScene()
-        scene.lightingEnvironment.contents = studioLight
-        scene.lightingEnvironment.intensity = 1.12
+        scene.lightingEnvironment.contents = ProceduralTextures.studio
+        scene.lightingEnvironment.intensity = 0.65
         let fixtures: [(UIColor, CGFloat, SCNVector3)] = [
-            (.white, 850, SCNVector3(-0.94, -0.55, 0)),
+            (.white, 1500, SCNVector3(-0.94, -0.55, 0)),
             (UIColor(red: 0.29, green: 0.71, blue: 1, alpha: 1), 550, SCNVector3(-0.41, 2.28, 0)),
         ]
         for (color, intensity, rotation) in fixtures {
@@ -548,6 +542,15 @@ private final class GarageStudio: SCNView {
             light.type = .directional
             light.color = color
             light.intensity = intensity
+            // The key light grounds the car on the platform.
+            if intensity > 1000 {
+                light.castsShadow = true
+                light.shadowMode = .forward
+                light.shadowMapSize = CGSize(width: 2048, height: 2048)
+                light.shadowSampleCount = 16
+                light.shadowRadius = 4
+                light.shadowColor = UIColor(white: 0, alpha: 0.6)
+            }
             fixture.light = light
             fixture.eulerAngles = rotation
             scene.rootNode.addChildNode(fixture)
