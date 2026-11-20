@@ -137,13 +137,21 @@ struct CarDesign {
         accent = rng.float() < 0.4 ? SIMD3(0.92, 0.94, 0.98) : Self.hsv(accentHue, 0.7, 1)
         glow = Self.hsv(hue + rng.float(0.42...0.58), 0.75, 1)
 
-        let syllables = ["VA", "KY", "ZE", "RO", "XI", "TA", "NU", "OR", "EL", "SA", "QUA", "MI", "DRA", "VEX", "LU", "ON"]
-        var word = ""
-        for _ in 0..<Int.random(in: 2...3, using: &rng) { word += syllables[Int.random(in: 0..<syllables.count, using: &rng)] }
-        name = "\(word)-\(Int.random(in: 2...99, using: &rng))"
+        // A maker for each character and a model from that maker's range.
         let strongest = ratings.indices.max(by: { ratings[$0] < ratings[$1] }) ?? 0
         className = ["INTERCEPTOR", "DRAGSTER", "SLIDER", "BRUISER"][strongest]
+        let range = Self.models[strongest]
+        name = "\(Self.makers[strongest]) \(range[Int.random(in: 0..<range.count, using: &rng)])"
     }
+
+    /// Who builds each class of car, in the order of `CarSpec.statNames`.
+    private static let makers = ["VANTA", "KORR", "LYRA", "BRUNT"]
+    private static let models = [
+        ["COMET", "JAVELIN", "MERIDIAN", "ZEPHYR", "MISTRAL", "TRACER", "AURORA", "PHOTON"],
+        ["SURGE", "RAMJET", "TORQUE", "FURNACE", "STAMPEDE", "DYNAMO", "HOWL", "PISTON"],
+        ["KITE", "DART", "WISP", "SWALLOW", "HAIRPIN", "RIBBON", "MANTIS", "FERRET"],
+        ["BULWARK", "RAMPART", "MASTIFF", "IRONSIDE", "CITADEL", "BOULDER", "RHINO", "GRANITE"],
+    ]
 
     private static func hsv(_ h: Float, _ s: Float, _ v: Float) -> SIMD3<Float> {
         let hue = (h - h.rounded(.down)) * 6
