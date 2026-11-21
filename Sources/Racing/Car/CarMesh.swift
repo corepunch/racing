@@ -376,6 +376,16 @@ enum CarMesh {
         flames.simdPosition = lower
         chassis.addChildNode(flames)
 
+        // Tail lights: a bar along the wing's trailing edge and a strip up the back of each end plate.
+        let edge = wingZ + rearChord / 2 + 0.012
+        var lamps = [(centre: SIMD3<Float>(0, wingY, edge), size: SIMD3<Float>(rearSpan * 1.7, 0.034, 0.03))]
+        for side: Float in [-1, 1] {
+            lamps.append((SIMD3(side * rearSpan, wingY - 0.06, edge + 0.06), SIMD3(0.034, 0.24, 0.03)))
+        }
+        let tail = makeTailLights(lamps)
+        tail.simdPosition = lower
+        chassis.addChildNode(tail)
+
         let rim = materials(paint: design.primary, accent: design.accent, light: design.glow,
                             detailed: false)[Slot.accent.rawValue]
         let wheels = places.map { p -> SCNNode in
@@ -441,6 +451,37 @@ enum CarMesh {
         bar.firstMaterial = dark
         carrier.addChildNode(SCNNode(geometry: bar))
         return carrier
+    }
+
+    /// Red, whatever the car's colours: everyone behind reads it the same way.
+    static let tailColor = SIMD3<Float>(1, 0.13, 0.37)
+
+    /// Tail lights from boxes modelled with the road at y = 0. They are a node of their own,
+    /// named for `setBrake`, with their own lens so one car's braking lights no other's.
+    static func makeTailLights(_ lamps: [(centre: SIMD3<Float>, size: SIMD3<Float>)]) -> SCNNode {
+        var shell = Shell()
+        for lamp in lamps { shell.box(.glow, centre: lamp.centre, size: lamp.size) }
+        let lens = SCNMaterial()
+        lens.lightingModel = .constant
+        lens.diffuse.contents = UIColor.black
+        lens.emission.contents = color(tailColor)
+        let node = SCNNode(geometry: shell.mesh.geometry(materials: Array(repeating: lens, count: Slot.allCases.count)))
+        node.name = "tail"
+        node.castsShadow = false
+        setBrake(0, on: node, lens: lens)
+        return node
+    }
+
+    /// Sets the tail lights: 0 running, anything more is the brakes, full by a light touch.
+    static func setBrake(_ amount: Float, on car: SCNNode) {
+        guard let lens = car.childNode(withName: "tail", recursively: false)?.geometry?.firstMaterial else { return }
+        setBrake(amount, on: car, lens: lens)
+    }
+
+    private static func setBrake(_ amount: Float, on car: SCNNode, lens: SCNMaterial) {
+        // Running lights sit just over the bloom threshold; brake lights flare well past it.
+        let intensity = CGFloat(mix(1.8, 6, smoothstep(0.02, 0.2, amount)))
+        if lens.emission.intensity != intensity { lens.emission.intensity = intensity }
     }
 
     /// Tyre rubber: dull, never metallic. `treadAround` a wheel of that radius cuts a tread into

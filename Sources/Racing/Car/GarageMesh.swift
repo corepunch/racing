@@ -44,6 +44,17 @@ enum GarageMesh {
         let exhausts = nozzles(for: motor).map { ($0.position + motorMount(size) + ground.simdPosition, $0.radius) }
         car.addChildNode(CarMesh.makeFlames(exhausts, glow: glow))
 
+        // Tail lights on the rear part, and along the wing's trailing edge when one is fitted.
+        let rear = build.part(at: .rear) ?? .cutTail
+        let tailEnd = SIMD3<Float>(0, -CarMesh.axleHeight, size.end)
+        var lamps = tailLamps(rear).map { (centre: $0.centre + tailEnd, size: $0.size) }
+        if let wing = build.part(at: .wing) {
+            let (high, span) = wingSize(wing)
+            lamps.append((SIMD3(0, high + 0.055, 0.412) + tailEnd + addonMount(for: rear),
+                          SIMD3(span * 1.56, 0.026, 0.024)))
+        }
+        car.addChildNode(CarMesh.makeTailLights(lamps))
+
         let suspension = suspensionMesh(size)
         ground.addChildNode(suspension)
         let radii = WheelPosition.allCases.map { $0.isFront ? size.frontRadius : size.rearRadius }
@@ -66,7 +77,9 @@ enum GarageMesh {
         if part.slot == .wheels {
             return wheel(part, radius: size.rearRadius, width: size.tyreWidth, paint: part.slot.factoryPaint)
         }
-        return makePart(part, size: size, paint: part.slot.factoryPaint, on: build.part(at: .frame) ?? .sprint)
+        let node = makePart(part, size: size, paint: part.slot.factoryPaint, on: build.part(at: .frame) ?? .sprint)
+        if part.slot == .rear { node.addChildNode(CarMesh.makeTailLights(tailLamps(part))) }
+        return node
     }
 
     /// `chassis` is the frame the part goes on: it sets the livery the bodywork shares.
@@ -233,8 +246,6 @@ enum GarageMesh {
                 (0.50, 1.04, 0.30, 0.65), (0.76, 0.85, 0.37, 0.55),
             ])
             for side: Float in [-1, 1] {
-                shell.box(.glow, centre: SIMD3(side * 0.65, 0.487, 0.766),
-                          size: SIMD3(0.21, 0.041, 0.031))
                 shell.box(.accent, centre: SIMD3(side * 0.76, 0.585, 0.63),
                           size: SIMD3(0.13, 0.074, 0.24))
             }
@@ -244,17 +255,31 @@ enum GarageMesh {
                 panel(&shell, .paint, x: side * 0.76, [
                     (0.37, 0.29, 0.34, 0.57), (0.60, 0.38, 0.30, 0.74), (0.86, 0.26, 0.38, 0.66),
                 ])
-                shell.box(.glow, centre: SIMD3(side * 0.76, 0.555, 0.87),
-                          size: SIMD3(0.33, 0.045, 0.031))
             }
             shell.box(.accent, centre: SIMD3(0, 0.53, 0.49), size: SIMD3(1.16, 0.17, 0.27))
         default:
             panel(&shell, .paint, [
                 (-0.13, 0.45, 0.31, 0.48), (0.16, 0.49, 0.27, 0.52), (0.39, 0.31, 0.34, 0.44),
             ])
-            shell.box(.glow, centre: SIMD3(0, 0.411, 0.398), size: SIMD3(0.37, 0.029, 0.026))
         }
         if part.attachment != nil { mountPads(&shell, mount: addonMount(for: part), span: 0.49) }
+    }
+
+    /// Where each rear part carries its tail lights, in the part's own space.
+    private static func tailLamps(_ part: CarPart) -> [(centre: SIMD3<Float>, size: SIMD3<Float>)] {
+        switch part {
+        case .flightDeck:
+            return ([-1, 1] as [Float]).map { (SIMD3($0 * 0.65, 0.487, 0.766), SIMD3(0.21, 0.041, 0.031)) }
+        case .twinTail:
+            return ([-1, 1] as [Float]).map { (SIMD3($0 * 0.76, 0.555, 0.87), SIMD3(0.33, 0.045, 0.031)) }
+        default:
+            return [(SIMD3(0, 0.411, 0.398), SIMD3(0.37, 0.029, 0.026))]
+        }
+    }
+
+    /// Height of a wing's blade above its mount, and its half-span.
+    private static func wingSize(_ part: CarPart) -> (high: Float, span: Float) {
+        part == .doubleDeck ? (0.79, 1.23) : (0.46, 0.99)
     }
 
     private static func addonMount(for part: CarPart) -> SIMD3<Float> {
@@ -294,8 +319,7 @@ enum GarageMesh {
     private static func wing(_ part: CarPart, shell: inout Shell, name: (String, SIMD3<Float>)? = nil) {
         // A wing is a lettering surface: no seams under the name.
         shell.plain = true
-        let high: Float = part == .doubleDeck ? 0.79 : 0.46
-        let span: Float = part == .doubleDeck ? 1.23 : 0.99
+        let (high, span) = wingSize(part)
         for side: Float in [-1, 1] {
             shell.slab(.metal, root: (SIMD3(side * 0.49, 0.03, -0.07), SIMD3(side * 0.49, 0.03, 0.08)),
                        tip: (SIMD3(side * 0.71, high, 0.06), SIMD3(side * 0.71, high, 0.24)),

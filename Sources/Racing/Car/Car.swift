@@ -322,6 +322,7 @@ final class Car {
         let exhaustTarget = min(1, speed / spec.topSpeed) + (boosting ? 0.6 : 0)
         exhaust += (exhaustTarget - exhaust) * min(1, 2.5 * dt)
         CarMesh.setThrust(exhaust, on: node)
+        CarMesh.setBrake(Float(braking), on: node)
     }
 
     /// Chassis stability, part of how the car handles rather than an assist: damps pitch
