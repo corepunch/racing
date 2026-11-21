@@ -642,13 +642,13 @@ enum ProceduralTextures {
             // >>>>> then a pin line to the next run; twin stripes either side of the spine.
             let s = z - abs(dy) * 1.3
             let run = stripes(s, pitch: 0.22, fill: 0.42) * span(s, 0.0, 1.1)
-            let pin = band(dy, 0.011, aa) * span(s, 1.16, 1.96)
+            let pin = band(dy, 0.02, aa) * span(s, 1.16, 1.96)
             return max(band(a - 0.11, 0.035, aa), flank * run, pin)
         case 1:
             // ////// hazard block; one broad stripe down the spine with a keyline.
             let s = z + dy * 1.0
             let block = stripes(s, pitch: 0.15, fill: 0.5) * span(s, 0.15, 1.05)
-            return max(band(a, 0.085, aa), band(a - 0.135, 0.012, aa), flank * block)
+            return max(band(a, 0.085, aa), band(a - 0.15, 0.02, aa), flank * block)
         default:
             // A solid band with an arrowhead cut out of it every metre; stripes beside the canopy.
             let s = z - abs(dy) * 1.3
