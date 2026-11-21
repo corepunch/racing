@@ -70,7 +70,7 @@ enum GarageMesh {
         let radii = WheelPosition.allCases.map { $0.isFront ? size.frontRadius : size.rearRadius }
         let wheels = zip(WheelPosition.allCases, radii).map { position, radius in
             let node = wheel(build.part(at: .wheels) ?? .slick, radius: radius, width: size.tyreWidth,
-                             paint: build.paint(for: .wheels, wheel: position))
+                             paint: build.paint(for: .wheels, wheel: position), inboard: -position.side)
             node.name = position.rawValue
             node.simdPosition = SIMD3(position.side * size.track, radius - CarMesh.axleHeight,
                                       position.isFront ? -size.axle : size.axle)
@@ -85,7 +85,8 @@ enum GarageMesh {
         build.equip(part, at: part.slot)
         let size = GarageDimensions(build)
         if part.slot == .wheels {
-            return wheel(part, radius: size.rearRadius, width: size.tyreWidth, paint: part.slot.factoryPaint)
+            return wheel(part, radius: size.rearRadius, width: size.tyreWidth, paint: part.slot.factoryPaint,
+                         inboard: 1)
         }
         let node = makePart(part, size: size, paint: part.slot.factoryPaint, on: build.part(at: .frame) ?? .sprint)
         if part.slot == .rear { node.addChildNode(CarMesh.makeTailLights(tailLamps(part))) }
@@ -199,12 +200,22 @@ enum GarageMesh {
 
         let glassWidth = core * (part == .atlas ? 0.83 : 0.68)
         let rise: Float = part == .sprint ? 0.30 : 0.40
+        // The glass carries its reflections as a texture laid along the canopy and up its height.
+        let nose = -end * 0.62, tail = end * 0.24, sill = h + 0.04, crown = h + rise + 0.015
+        shell.mapping = { p, _, _ in SIMD2((p.z - nose) / (tail - nose), (p.y - sill) / (crown - sill)) }
         panel(&shell, .glass, roof: 0.75, [
-            (-end * 0.62, glassWidth * 0.66, h + 0.04, h + 0.10),
+            (nose, glassWidth * 0.66, sill, h + 0.10),
             (-end * 0.27, glassWidth, h + 0.09, h + rise),
-            (-end * 0.02, glassWidth * 0.94, h + 0.09, h + rise + 0.015),
-            (end * 0.24, glassWidth * 0.72, h + 0.04, h + 0.15),
+            (-end * 0.02, glassWidth * 0.94, h + 0.09, crown),
+            (tail, glassWidth * 0.72, sill, h + 0.15),
         ])
+        shell.mapping = nil
+        // A bow over the glass where the windscreen meets the roof.
+        let bow = (z: -end * 0.27, half: Float(0.028), proud: Float(0.014))
+        shell.loft(.accent, [bow.z - bow.half, bow.z + bow.half].map {
+            CarMesh.section(z: $0, halfWidth: glassWidth + bow.proud, top: h + rise + bow.proud, bottom: h + 0.09,
+                            chine: 0.43, roof: 0.75)
+        })
         for side: Float in [-1, 1] {
             shell.box(.accent, centre: SIMD3(side * glassWidth, h + 0.10, -end * 0.27),
                       size: SIMD3(0.09, 0.046, end * 0.56))
@@ -413,21 +424,34 @@ enum GarageMesh {
         return node(named: "suspension", shell: shell, paint: CarSlot.frame.factoryPaint)
     }
 
-    private static func wheel(_ part: CarPart, radius: Float, width: Float, paint: GaragePaint) -> SCNNode {
+    /// `inboard` is the side of the wheel that faces the car: +1 towards +x.
+    private static func wheel(_ part: CarPart, radius: Float, width: Float, paint: GaragePaint,
+                              inboard: Float) -> SCNNode {
         var shell = Shell()
         let segments = part == .wideTrack ? 20 : 24
-        func ring(_ x: Float, _ radius: Float) -> [SIMD3<Float>] {
-            (0..<segments).map { i in
-                let angle = Float(i) * 2 * .pi / Float(segments)
+        func ring(_ x: Float, _ radius: Float, sides: Int? = nil) -> [SIMD3<Float>] {
+            let count = sides ?? segments
+            return (0..<count).map { i in
+                let angle = Float(i) * 2 * .pi / Float(count)
                 return SIMD3(x, cos(angle) * radius, sin(angle) * radius)
             }
         }
+        // Everything bolted to the axle is round, so it can turn with the wheel: a brake disc
+        // and the carrier the suspension arms run into.
+        var brake = Shell()
+        let back = inboard * width * 0.51
+        brake.loft(.metal, [ring(back + inboard * 0.030, radius * 0.60), ring(back + inboard * 0.052, radius * 0.60)])
+        brake.loft(.metal, [ring(back, radius * 0.27), ring(back + inboard * 0.13, radius * 0.21)])
         for side: Float in [-1, 1] {
             let inner = side * width * 0.43
             let outer = side * width * 0.51
             let lip: Float = part == .aero ? 0.78 : 0.68
             shell.loft(.paint, [ring(inner, radius * lip), ring(outer, radius * lip * 0.96)])
-            shell.loft(.metal, [ring(outer, radius * 0.28), ring(outer + side * 0.024, radius * 0.23)])
+            // Spokes, hub and its lock nut are on the face that shows.
+            if side == inboard { continue }
+            shell.loft(.metal, [ring(outer, radius * 0.30), ring(outer + side * 0.034, radius * 0.25)])
+            shell.loft(.accent, [ring(outer + side * 0.034, radius * 0.15, sides: 6),
+                                 ring(outer + side * 0.066, radius * 0.12, sides: 6)])
             for i in 0..<(part == .slick ? 3 : 6) {
                 let angle = 2 * Float.pi * Float(i) / (part == .slick ? 3 : 6)
                 let a = SIMD3<Float>(0, cos(angle), sin(angle))
@@ -440,6 +464,8 @@ enum GarageMesh {
         }
         // Panel seams belong on bodywork, not across a rim.
         let node = node(named: part.rawValue, shell: shell, paint: paint, detailed: false)
+        node.addChildNode(SCNNode(geometry: brake.geometry(
+            materials: Array(repeating: CarMesh.steel(), count: Slot.allCases.count))))
         var tyre = Shell()
         // Once round the wheel and once across the tread. A face on the join is unwrapped
         // towards its own centre, so the tread carries on over it.

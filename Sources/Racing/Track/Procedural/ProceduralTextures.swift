@@ -603,6 +603,16 @@ enum ProceduralTextures {
         }
     }
 
+    /// Shading for canopy glass, laid along the canopy (u, nose first) and up it (v): dark low
+    /// down, lighter towards the crown, with streaks of reflection slanting back across it. Two
+    /// cross the windscreen and one the rear glass, which is the face a chasing camera sees.
+    static let canopy: UIImage = image(width: 256, height: 128) { u, v in
+        let slant = u - 0.3 * v
+        let streak = max(band(slant - 0.13, 0.07, 0.02), band(slant - 0.30, 0.025, 0.015) * 0.8,
+                         band(slant - 0.64, 0.07, 0.02) * 0.85)
+        return SIMD3(repeating: mix(mix(0.2, 0.6, smoothstep(0.1, 1, v)), 1, streak))
+    }
+
     static let carLiveryStyles = 3
     private static let liveries = NSCache<NSString, UIImage>()
 

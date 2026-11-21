@@ -271,6 +271,31 @@ enum CarMesh {
         return m
     }
 
+    /// Machined steel for brake discs and hub carriers: pale, so it shows against a tyre.
+    static func steel() -> SCNMaterial {
+        let m = SCNMaterial()
+        m.lightingModel = .physicallyBased
+        m.diffuse.contents = UIColor(white: 0.62, alpha: 1)
+        m.metalness.contents = 0.85
+        m.roughness.contents = 0.38
+        return m
+    }
+
+    /// Canopy glass in a deep shade of the car's light colour. Its reflections are painted on,
+    /// so it reads as glass in a dark hall as well as under an open sky.
+    static func glass(tint light: SIMD3<Float>) -> SCNMaterial {
+        let m = SCNMaterial()
+        m.lightingModel = .physicallyBased
+        m.diffuse.contents = color(simd_mix(SIMD3(0.08, 0.12, 0.2), light, SIMD3(repeating: 0.5)))
+        m.multiply.contents = ProceduralTextures.canopy
+        m.multiply.mipFilter = .linear
+        m.metalness.contents = 0.25
+        m.roughness.contents = 0.14
+        m.clearCoat.contents = 1.0
+        m.clearCoatRoughness.contents = 0.08
+        return m
+    }
+
     /// Sets the afterburners: 0 idle, 1 flat out, above 1 on boost.
     static func setThrust(_ amount: Float, on car: SCNNode) {
         if let flames = car.childNode(withName: "flames", recursively: false) {
@@ -326,7 +351,7 @@ enum CarMesh {
             body,
             pbr(accent, metal: 0.5, rough: 0.4, coat: true, detail: ProceduralTextures.carPanels),
             pbr(SIMD3(0.09, 0.1, 0.12), metal: 0.9, rough: 0.45, detail: ProceduralTextures.carMetal),
-            pbr(SIMD3(0.03, 0.05, 0.08), metal: 1, rough: 0.08),
+            glass(tint: light),
             glow,
         ]
     }
