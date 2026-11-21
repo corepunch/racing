@@ -41,6 +41,11 @@ struct GaragePaint: Codable, Equatable {
 
     init(_ hex: UInt32) { self.hex = hex }
 
+    init(rgb: SIMD3<Float>) {
+        let c = simd_clamp(rgb, .zero, SIMD3(repeating: 1)) * 255
+        hex = UInt32(c.x.rounded()) << 16 | UInt32(c.y.rounded()) << 8 | UInt32(c.z.rounded())
+    }
+
     var rgb: SIMD3<Float> {
         SIMD3(Float((hex >> 16) & 255), Float((hex >> 8) & 255), Float(hex & 255)) / 255
     }

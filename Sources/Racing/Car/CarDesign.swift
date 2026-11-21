@@ -28,20 +28,11 @@ struct CarSpec {
     }
 }
 
-/// A complete car: its numbers and the shape parameters the mesh is built from.
-/// Everything comes from the seed; form follows function, so a fast car is long
-/// and low, a strong one has fat rear tyres and more exhausts, an agile one has
-/// a wide track and big wings, an armoured one is bulky.
+/// A complete car: its numbers, the parts and paint it is built from, and what it wears.
+/// Every car is a garage build. The player puts their own together; a generated car is one
+/// its maker built to suit its ratings, so form follows function: an armoured car gets the
+/// heavy frame and a plough, a strong one more engine and fat tyres, an agile one wings.
 struct CarDesign {
-    enum Layout: Int, CaseIterable {
-        /// Narrow central tub with side pods: an open-wheel single-seater.
-        case formula
-        /// Wide wedge that fills the space between the wheels.
-        case wedge
-        /// Twin booms either side of a central pod.
-        case twin
-    }
-
     let seed: UInt64
     var name: String
     let className: String
@@ -49,38 +40,26 @@ struct CarDesign {
     let maker: String
     let number: Int
     var spec: CarSpec
-    let garage: GarageBuild?
-    private let garageDimensions: GarageDimensions?
-
-    let layout: Layout
-    let length: Float
-    /// Half-width of the bodywork.
-    let width: Float
-    let height: Float
-    /// Lateral distance from the centre line to the middle of each wheel.
-    let track: Float
-    let frontRadius: Float
-    let rearRadius: Float
-    let tyreWidth: Float
-    /// 0...1 size of the front and rear wings.
-    let wing: Float
-    let engineCount: Int
-    let engineRadius: Float
+    let build: GarageBuild
+    private let dimensions: GarageDimensions
+    /// The racing graphics a maker gives its car, in its second colour. A player's own build
+    /// has none of its own and takes its frame's, in a shade that reads on its paint.
+    let livery: (style: Int, color: SIMD3<Float>)?
 
     let primary: SIMD3<Float>
     let accent: SIMD3<Float>
     let glow: SIMD3<Float>
 
     /// Overall half-width including the tyres.
-    var halfWidth: Float { max(track + tyreWidth / 2, garageDimensions?.bodyHalfWidth ?? 0) }
-    var axle: Float { garageDimensions?.axle ?? length * 0.31 }
-    var frontCollisionExtent: Float { garageDimensions?.frontExtent ?? length * 0.46 }
-    var rearCollisionExtent: Float { garageDimensions?.rearExtent ?? length * 0.46 }
+    var halfWidth: Float { max(dimensions.track + dimensions.tyreWidth / 2, dimensions.bodyHalfWidth) }
+    var axle: Float { dimensions.axle }
+    var frontCollisionExtent: Float { dimensions.frontExtent }
+    var rearCollisionExtent: Float { dimensions.rearExtent }
+    var length: Float { dimensions.frontExtent + dimensions.rearExtent }
 
     init(garage: GarageBuild) {
-        let dimensions = GarageDimensions(garage)
-        self.garage = garage
-        garageDimensions = dimensions
+        build = garage
+        dimensions = GarageDimensions(garage)
         seed = 0
         name = "MY RACER"
         maker = (garage.part(at: .frame)?.title ?? "Sprint").uppercased()
@@ -89,17 +68,7 @@ struct CarDesign {
         let parts = CarSlot.allCases.compactMap { garage.part(at: $0)?.rawValue }.joined()
         number = 2 + parts.utf8.reduce(0) { ($0 &* 31 &+ Int($1)) % 98 }
         spec = dimensions.spec
-        layout = .wedge
-        length = dimensions.frontExtent + dimensions.rearExtent
-        width = dimensions.bodyWidth
-        height = dimensions.deckHeight
-        track = dimensions.track
-        frontRadius = dimensions.frontRadius
-        rearRadius = dimensions.rearRadius
-        tyreWidth = dimensions.tyreWidth
-        wing = 0
-        engineCount = 1
-        engineRadius = 0.20
+        livery = nil
         primary = garage.paint(for: .frame).rgb
         accent = garage.paint(for: .front).rgb
         glow = SIMD3(0.28, 0.90, 1)
@@ -108,8 +77,6 @@ struct CarDesign {
     /// `focus` picks the stat the car leans on, so a roster covers every style.
     init(seed: UInt64, focus: Int, hue: Float, budget: Float = 2.3) {
         self.seed = seed
-        garage = nil
-        garageDimensions = nil
         var rng = SplitMix64(seed: seed &* 0x9E3779B97F4A7C15 &+ 0xD1B54A32)
 
         // Stats: random, pulled towards the focus, then scaled to a common budget.
@@ -126,23 +93,38 @@ struct CarDesign {
         spec = CarSpec(ratings: ratings)
         let (speed, thrust, agility, armor) = (ratings[0], ratings[1], ratings[2], ratings[3])
 
-        layout = Layout.allCases[Int.random(in: 0..<Layout.allCases.count, using: &rng)]
-        length = 4.2 + 1.3 * speed + rng.float(-0.1...0.1)
-        track = 1.12 + 0.26 * agility + rng.float(-0.03...0.03)
-        tyreWidth = 0.44 + 0.2 * thrust
-        frontRadius = 0.37 + 0.06 * armor
-        rearRadius = 0.44 + 0.13 * thrust
-        // Bodywork stays clear of the tyres.
-        width = min(track - tyreWidth / 2 - 0.12, 0.5 + 0.4 * armor + rng.float(-0.03...0.03))
-        height = 0.74 + 0.2 * armor - 0.1 * speed + rng.float(-0.02...0.04)
-        wing = 0.25 + 0.75 * agility
-        engineCount = thrust > 0.7 ? 3 : (thrust > 0.38 ? 2 : 1)
-        engineRadius = 0.15 + 0.1 * thrust + (engineCount == 1 ? 0.08 : 0)
+        // The parts follow the ratings, each measured against the car's own average so that a
+        // cheap car and a dear one are read the same way. Where they have no opinion, the seed decides.
+        let tail = Int.random(in: 0..<3, using: &rng)
+        let (nose, rims, lip, aero) = (rng.float(), rng.float(), rng.float(), rng.float())
+        let mean = ratings.reduce(0, +) / 4
+        let (fast, strong, agile, tough) = (speed / mean, thrust / mean, agility / mean, armor / mean)
+        var parts = GarageBuild()
+        // Where a car is both agile and tough, the stronger trait picks its frame and nose.
+        let nimble = agile > 1.1 && agile > tough
+        parts.equip(nimble || tough < 0.75 ? .sprint : (tough > 1.15 ? .atlas : .vector), at: .frame)
+        parts.equip(strong > 1.25 ? .reactor : (strong > 0.9 ? .twinJet : .pulse), at: .motor)
+        parts.equip(strong > 1.2 ? .wideTrack : (fast > 1.05 || rims > 0.6 ? .aero : .slick), at: .wheels)
+        parts.equip(nimble ? .fork : (tough > 1.2 ? .plow : (nose < 0.5 ? .needle : (nose < 0.8 ? .fork : .plow))),
+                    at: .front)
+        parts.equip(tail == 2 ? .twinTail : (tail == 1 || agile > 1.1 ? .flightDeck : .cutTail), at: .rear)
+        // Wings and splitters only fit the parts with mounts for them; `equip` ignores the rest.
+        parts.equip(agile > 1.25 ? .doubleDeck : (agile > 0.95 || aero > 0.6 ? .bridge : nil), at: .wing)
+        parts.equip(fast > 1.15 ? .blade : (agile > 1.15 ? .divePlanes : (lip > 0.7 ? .blade : nil)), at: .splitter)
 
         primary = Self.hsv(hue, rng.float(0.72...0.92), rng.float(0.85...1))
         let accentHue = hue + (rng.float() < 0.5 ? 0.5 : 0.08) + rng.float(-0.04...0.04)
         accent = rng.float() < 0.4 ? SIMD3(0.92, 0.94, 0.98) : Self.hsv(accentHue, 0.7, 1)
         glow = Self.hsv(hue + rng.float(0.42...0.58), 0.75, 1)
+
+        // Team colours: the body in one, the wings, rims and engine in the other.
+        for slot in CarSlot.allCases {
+            let body = slot == .frame || slot == .front || slot == .rear
+            parts.paint(GaragePaint(rgb: body ? primary : accent), at: slot)
+        }
+        build = parts
+        dimensions = GarageDimensions(parts)
+        livery = (Int(seed % UInt64(ProceduralTextures.carLiveryStyles)), accent)
 
         // A maker for each character and a model from that maker's range.
         let strongest = ratings.indices.max(by: { ratings[$0] < ratings[$1] }) ?? 0

@@ -8,7 +8,17 @@ enum GarageMesh {
     private typealias Station = (z: Float, width: Float, bottom: Float, top: Float)
     private typealias Nozzle = (position: SIMD3<Float>, radius: Float)
 
-    static func build(_ build: GarageBuild, glow: SIMD3<Float>, markings: CarMesh.Markings? = nil) -> CarModel {
+    /// What a build wears beyond its parts and paint: lettering, a maker's own racing graphics
+    /// in place of the frame's, and the colour of its light strips.
+    private struct Dress {
+        var markings: CarMesh.Markings?
+        var livery: (style: Int, color: SIMD3<Float>)?
+        var light = SIMD3<Float>(0.27, 0.87, 1)
+    }
+
+    static func build(_ build: GarageBuild, glow: SIMD3<Float>, markings: CarMesh.Markings? = nil,
+                      livery: (style: Int, color: SIMD3<Float>)? = nil) -> CarModel {
+        let dress = Dress(markings: markings, livery: livery, light: glow)
         let size = GarageDimensions(build)
         let car = SCNNode()
         let ground = SCNNode()
@@ -16,11 +26,11 @@ enum GarageMesh {
         car.addChildNode(ground)
 
         let chassis = build.part(at: .frame) ?? .sprint
-        let frame = makePart(chassis, size: size, paint: build.paint(for: .frame), on: chassis, markings: markings)
+        let frame = makePart(chassis, size: size, paint: build.paint(for: .frame), on: chassis, dress: dress)
         ground.addChildNode(frame)
         for slot in [CarSlot.front, .rear, .motor] {
             guard let part = build.part(at: slot) else { continue }
-            let node = makePart(part, size: size, paint: build.paint(for: slot), on: chassis)
+            let node = makePart(part, size: size, paint: build.paint(for: slot), on: chassis, dress: dress)
             switch slot {
             case .front: node.position.z = -size.end
             case .rear: node.position.z = size.end
@@ -35,7 +45,7 @@ enum GarageMesh {
                 node.addChildNode(mount)
                 if let addon = build.part(at: socket) {
                     mount.addChildNode(makePart(addon, size: size, paint: build.paint(for: socket), on: chassis,
-                                                markings: markings))
+                                                dress: dress))
                 }
             }
         }
@@ -84,18 +94,21 @@ enum GarageMesh {
 
     /// `chassis` is the frame the part goes on: it sets the livery the bodywork shares.
     private static func makePart(_ part: CarPart, size: GarageDimensions, paint: GaragePaint,
-                                 on chassis: CarPart, markings: CarMesh.Markings? = nil) -> SCNNode {
+                                 on chassis: CarPart, dress: Dress = Dress()) -> SCNNode {
         var shell = Shell()
-        // The nose and tail hang off the ends of the frame; their graphics carry on from it.
-        var livery: Int?
-        switch part.slot {
-        case .frame: livery = liveryStyle(chassis)
-        case .front: livery = liveryStyle(chassis); shell.origin.z = -size.end
-        case .rear: livery = liveryStyle(chassis); shell.origin.z = size.end
-        default: break
+        // The bodywork wears the racing graphics. The nose and tail hang off the ends of the
+        // frame, so theirs carry on from it.
+        let ink = dress.livery?.color ?? graphics(on: paint)
+        var livery: (SIMD3<Float>, Int)?
+        if part.slot == .frame || part.slot == .front || part.slot == .rear {
+            livery = (ink, dress.livery?.style ?? liveryStyle(chassis))
+            shell.origin.z = part.slot == .front ? -size.end : (part.slot == .rear ? size.end : 0)
         }
+        let markings = dress.markings
         switch part.slot {
-        case .frame: frame(part, size: size, shell: &shell, number: markings.map { ($0.number, graphics(on: paint), paint.rgb) })
+        case .frame:
+            frame(part, size: size, shell: &shell,
+                  number: markings.map { ($0.number, ink, CarMesh.legible(paint.rgb, on: ink)) })
         case .front: front(part, shell: &shell)
         case .rear: rear(part, shell: &shell)
         case .motor: motor(part, shell: &shell)
@@ -103,7 +116,7 @@ enum GarageMesh {
         case .wing: wing(part, shell: &shell, name: markings.map { ($0.maker, graphics(on: paint)) })
         case .wheels: preconditionFailure("Wheel parts use their own rotating carrier")
         }
-        return node(named: part.rawValue, shell: shell, paint: paint, livery: livery)
+        return node(named: part.rawValue, shell: shell, paint: paint, livery: livery, light: dress.light)
     }
 
     private static func liveryStyle(_ frame: CarPart) -> Int {
@@ -122,14 +135,11 @@ enum GarageMesh {
     }
 
     private static func node(named name: String, shell: Shell, paint: GaragePaint, detailed: Bool = true,
-                             livery: Int? = nil) -> SCNNode {
+                             livery: (SIMD3<Float>, Int)? = nil, light: SIMD3<Float> = Dress().light) -> SCNNode {
         let color = paint.rgb
-        let graphics = graphics(on: paint)
         let trim = color * 0.67 + SIMD3<Float>(0.22, 0.25, 0.28)
-        let light: SIMD3<Float> = name == CarPart.cutTail.rawValue || name == CarPart.flightDeck.rawValue
-            || name == CarPart.twinTail.rawValue ? SIMD3(1, 0.13, 0.37) : SIMD3(0.27, 0.87, 1)
         let materials = CarMesh.materials(paint: color, accent: trim, light: light, detailed: detailed,
-                                          livery: livery.map { (graphics, $0) })
+                                          livery: livery)
         let result = shell.node(materials: materials)
         result.name = name
         return result
@@ -148,7 +158,7 @@ enum GarageMesh {
     }
 
     private static func frame(_ part: CarPart, size: GarageDimensions, shell: inout Shell,
-                              number: (Int, ink: SIMD3<Float>, paint: SIMD3<Float>)? = nil) {
+                              number: (Int, board: SIMD3<Float>, ink: SIMD3<Float>)? = nil) {
         let w = size.bodyWidth, h = size.deckHeight, end = size.end
         panel(&shell, .metal, roof: 0.91, [
             (-end - 0.05, w * 0.61, 0.25, 0.39), (-end * 0.64, w, 0.24, 0.41),
@@ -162,9 +172,9 @@ enum GarageMesh {
             (end + 0.05, core * 0.61, 0.32, h),
         ])
         // The race number on its board, on the bonnet ahead of the canopy.
-        if let (number, ink, paint) = number {
+        if let (number, board, ink) = number {
             let bonnet = CarMesh.Face.roof(hull[0], hull[1])
-            shell.decal(String(number), color: paint, plate: ink, centre: bonnet.centre - SIMD3(0, 0, 0.03),
+            shell.decal(String(number), color: ink, plate: board, centre: bonnet.centre - SIMD3(0, 0, 0.03),
                         normal: bonnet.normal, up: SIMD3(0, 0, -1), height: min(0.3, bonnet.length * 0.5),
                         maxWidth: bonnet.rise * 0.85)
         }

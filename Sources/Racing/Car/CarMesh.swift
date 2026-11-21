@@ -9,7 +9,8 @@ struct CarModel {
     let radii: [Float]
 }
 
-/// Builds a faceted open-wheel racer from a `CarDesign`. Nose points along −Z. The node's
+/// Turns a `CarDesign` into its model, and holds what every car's bodywork is made with: the
+/// faceted shell, its materials, the plumes and the lights. Nose points along −Z. The node's
 /// origin is `axleHeight` above the road, between the axles.
 enum CarMesh {
 
@@ -169,15 +170,6 @@ enum CarMesh {
         ]
     }
 
-    /// A body lofted through `stations`: `t` runs 0 (nose) to 1 (tail), `w` and `h` scale width and height.
-    private static func body(x: Float = 0, from z0: Float, to z1: Float, width: Float, height: Float,
-                             _ stations: [(t: Float, w: Float, h: Float)], roof: Float = 0.4) -> [[SIMD3<Float>]] {
-        stations.map { s in
-            section(x: x, z: z0 + (z1 - z0) * s.t, halfWidth: width * s.w,
-                    top: clearance + (height - clearance) * s.h, roof: roof)
-        }
-    }
-
     /// One flat-ish face of a lofted body: its middle, the way it faces, and its size in the
     /// direction rings follow one another (`length`) and round the ring (`rise`).
     struct Face {
@@ -200,201 +192,11 @@ enum CarMesh {
 
         /// The roof of a `section` body between two rings.
         static func roof(_ a: [SIMD3<Float>], _ b: [SIMD3<Float>]) -> Face { Face(a, b, 0, 1) }
-        /// Its outward shoulder, between roof and chine, on the left (-1) or right (+1).
-        static func shoulder(_ a: [SIMD3<Float>], _ b: [SIMD3<Float>], side: Float) -> Face {
-            side > 0 ? Face(a, b, 1, 2) : Face(a, b, 0, 5)
-        }
     }
 
     static func build(_ design: CarDesign) -> CarModel {
-        let markings = Markings(maker: design.maker, number: design.number)
-        if let garage = design.garage { return GarageMesh.build(garage, glow: design.glow, markings: markings) }
-        var shell = Shell()
-        let L = design.length, W = design.width, H = design.height
-        let noseZ = -L / 2, tailZ = L / 2
-        let tub: [(t: Float, w: Float, h: Float)] = [
-            (0, 0.14, 0.2), (0.16, 0.4, 0.38), (0.4, 0.82, 0.8), (0.55, 1, 1), (0.8, 0.92, 0.82), (1, 0.72, 0.55),
-        ]
-
-        // Bodywork, and where the suspension arms, canopy and exhausts attach. Each layout wears
-        // its maker's name along both flanks, and its number on the nose where there is room.
-        var armX: Float
-        var canopy: (z: Float, width: Float, base: Float)
-        let primary = design.primary, accent = design.accent
-        func wordmark(_ a: [SIMD3<Float>], _ b: [SIMD3<Float>], side: Float, on surface: SIMD3<Float>) {
-            let face = Face.shoulder(a, b, side: side)
-            let board = surface == primary ? accent : primary
-            shell.decal(design.maker, color: legible(surface, on: board), plate: board, centre: face.centre, normal: face.normal,
-                        up: SIMD3(0, 1, 0), height: face.rise * 0.66, maxWidth: face.length * 0.85)
-        }
-        func nose(_ a: [SIMD3<Float>], _ b: [SIMD3<Float>]) {
-            let face = Face.roof(a, b)
-            guard face.rise >= 0.3 else { return }
-            shell.decal(String(design.number), color: legible(primary, on: accent), plate: accent, centre: face.centre,
-                        normal: face.normal,
-                        up: SIMD3(0, 0, -1), height: min(0.34, face.length * 0.6), maxWidth: face.rise * 0.8)
-        }
-        switch design.layout {
-        case .formula:
-            let core = W * 0.6
-            let rings = body(from: noseZ, to: tailZ, width: core, height: H, tub)
-            shell.loft(.paint, rings)
-            nose(rings[1], rings[2])
-            for side: Float in [-1, 1] {
-                let pod = body(x: side * (core + W * 0.2), from: -L * 0.1, to: L * 0.34, width: W * 0.36,
-                               height: H * 0.62, [(0, 0.5, 0.5), (0.25, 1, 1), (0.8, 1, 0.9), (1, 0.6, 0.6)])
-                shell.loft(.accent, pod)
-                wordmark(pod[1], pod[2], side: side, on: accent)
-            }
-            armX = core * 0.8
-            canopy = (L * 0.02, core * 0.62, H * 0.93)
-        case .wedge:
-            let rings = body(from: noseZ, to: tailZ, width: W, height: H, [
-                (0, 0.6, 0.12), (0.22, 0.9, 0.34), (0.5, 1, 0.92), (0.78, 1, 0.9), (1, 0.9, 0.62),
-            ], roof: 0.55)
-            shell.loft(.paint, rings)
-            nose(rings[0], rings[1])
-            // Side skirts.
-            for side: Float in [-1, 1] {
-                shell.box(.accent, centre: SIMD3(side * W, clearance + 0.09, L * 0.04), size: SIMD3(0.08, 0.14, L * 0.36))
-                wordmark(rings[2], rings[3], side: side, on: primary)
-            }
-            armX = W * 0.85
-            canopy = (L * 0.04, W * 0.5, H * 0.9)
-        case .twin:
-            let offset = W * 0.68
-            for side: Float in [-1, 1] {
-                let boom = body(x: side * offset, from: noseZ, to: tailZ, width: W * 0.3, height: H * 0.62, [
-                    (0, 0.3, 0.3), (0.2, 0.8, 0.7), (0.5, 1, 1), (0.8, 1, 0.9), (1, 0.8, 0.7),
-                ])
-                shell.loft(.paint, boom)
-                wordmark(boom[2], boom[3], side: side, on: primary)
-            }
-            let pod = body(from: -L * 0.16, to: L * 0.42, width: W * 0.46, height: H, [
-                (0, 0.3, 0.45), (0.3, 0.9, 0.95), (0.6, 1, 1), (1, 0.75, 0.6),
-            ])
-            shell.loft(.accent, pod)
-            // Deck tying the three together.
-            shell.loft(.metal, [
-                section(z: -L * 0.12, halfWidth: offset, top: clearance + 0.2, chine: 0.5, roof: 0.9),
-                section(z: L * 0.4, halfWidth: offset, top: clearance + 0.24, chine: 0.5, roof: 0.9),
-            ])
-            armX = W * 0.9
-            canopy = (L * 0.1, W * 0.3, H * 0.95)
-        }
-
-        // Canopy: a low glass blister.
-        let cz = canopy.z, cw = canopy.width, cb = canopy.base
-        shell.loft(.glass, [
-            section(z: cz - L * 0.15, halfWidth: cw * 0.4, top: cb + 0.02, bottom: cb - 0.14),
-            section(z: cz - L * 0.04, halfWidth: cw, top: cb + 0.2, bottom: cb - 0.14),
-            section(z: cz + L * 0.08, halfWidth: cw * 0.9, top: cb + 0.18, bottom: cb - 0.14),
-            section(z: cz + L * 0.17, halfWidth: cw * 0.35, top: cb + 0.05, bottom: cb - 0.14),
-        ])
-
-        // Front wing with end plates, low on the nose.
-        let frontSpan = design.halfWidth * (0.7 + 0.28 * design.wing)
-        let frontChord = 0.3 + 0.22 * design.wing
-        shell.box(.paint, centre: SIMD3(0, 0.25, noseZ + frontChord / 2 - 0.05), size: SIMD3(frontSpan * 2, 0.05, frontChord))
-        for side: Float in [-1, 1] {
-            shell.box(.accent, centre: SIMD3(side * frontSpan, 0.32, noseZ + frontChord / 2 - 0.05),
-                      size: SIMD3(0.05, 0.2, frontChord + 0.1))
-        }
-
-        // Rear wing on two struts.
-        let rearSpan = design.track * 0.92
-        let rearChord = 0.36 + 0.3 * design.wing
-        let wingY = H + 0.2 + 0.22 * design.wing
-        let wingZ = tailZ - 0.1
-        // The maker's name across the wing, where the chasing pack reads it, and the number on each end plate.
-        shell.plain = true
-        shell.box(.accent, centre: SIMD3(0, wingY, wingZ), size: SIMD3(rearSpan * 2, 0.06, rearChord))
-        shell.decal(design.maker, color: legible(primary, on: accent), centre: SIMD3(0, wingY + 0.03, wingZ), normal: SIMD3(0, 1, 0),
-                    up: SIMD3(0, 0, -1), height: rearChord * 0.6, maxWidth: rearSpan * 1.5)
-        for side: Float in [-1, 1] {
-            shell.box(.paint, centre: SIMD3(side * rearSpan, wingY - 0.06, wingZ), size: SIMD3(0.05, 0.3, rearChord + 0.12))
-            shell.decal(String(design.number), color: legible(accent, on: primary),
-                        centre: SIMD3(side * (rearSpan + 0.025), wingY - 0.06, wingZ),
-                        normal: SIMD3(side, 0, 0), up: SIMD3(0, 1, 0), height: 0.2, maxWidth: rearChord)
-            let strutX = side * min(W * 0.5, rearSpan * 0.5)
-            shell.slab(.metal,
-                       root: (SIMD3(strutX, H * 0.6, wingZ - 0.35), SIMD3(strutX, H * 0.6, wingZ - 0.05)),
-                       tip: (SIMD3(strutX, wingY, wingZ - 0.12), SIMD3(strutX, wingY, wingZ + 0.1)),
-                       thickness: SIMD3(0.03, 0, 0))
-        }
-        shell.plain = false
-
-        // Wheels and the arms that carry them.
-        let places: [(x: Float, z: Float, r: Float)] = [
-            (-design.track, -design.axle, design.frontRadius), (design.track, -design.axle, design.frontRadius),
-            (-design.track, design.axle, design.rearRadius), (design.track, design.axle, design.rearRadius),
-        ]
-        for p in places {
-            let side: Float = p.x > 0 ? 1 : -1
-            let hub = side * (design.track - design.tyreWidth / 2)
-            for (lead, y) in [(Float(-0.22), Float(0.5)), (0.22, 0.42)] {
-                shell.slab(.metal,
-                           root: (SIMD3(side * armX, y, p.z + lead - 0.09), SIMD3(side * armX, y, p.z + lead + 0.09)),
-                           tip: (SIMD3(hub, p.r, p.z - 0.05), SIMD3(hub, p.r, p.z + 0.05)),
-                           thickness: SIMD3(0, 0.03, 0))
-            }
-        }
-
-        // Exhausts: dark nozzles with a glowing face.
-        let r = design.engineRadius
-        let spread = min(W * 0.62, 0.62)
-        let engineX: [Float]
-        switch design.engineCount {
-        case 1: engineX = [0]
-        case 2: engineX = [-spread, spread]
-        default: engineX = [-spread, 0, spread]
-        }
-        var exhausts: [SIMD3<Float>] = []
-        for x in engineX {
-            let y = clearance + (H - clearance) * 0.42
-            func ring(_ z: Float, _ radius: Float) -> [SIMD3<Float>] {
-                (0..<8).map { k in
-                    let a = (Float(k) + 0.5) / 8 * 2 * .pi
-                    return SIMD3(x + cos(a) * radius, y + sin(a) * radius, z)
-                }
-            }
-            shell.loft(.metal, [ring(tailZ - 0.55, r * 0.75), ring(tailZ - 0.1, r * 1.1), ring(tailZ + 0.2, r)], endCap: .glow)
-            exhausts.append(SIMD3(x, y, tailZ + 0.21))
-        }
-
-        let mats = materials(design)
-        let chassis = SCNNode()
-        // Everything above was modelled with the road at y = 0.
-        let lower = SIMD3<Float>(0, -axleHeight, 0)
-        let hull = shell.node(materials: mats)
-        hull.name = "hull"
-        hull.simdPosition = lower
-        chassis.addChildNode(hull)
-
-        // Afterburner plumes: additive cones the game stretches with thrust.
-        let flames = makeFlames(exhausts.map { ($0, r) }, glow: design.glow)
-        flames.simdPosition = lower
-        chassis.addChildNode(flames)
-
-        // Tail lights: a bar along the wing's trailing edge and a strip up the back of each end plate.
-        let edge = wingZ + rearChord / 2 + 0.012
-        var lamps = [(centre: SIMD3<Float>(0, wingY, edge), size: SIMD3<Float>(rearSpan * 1.7, 0.034, 0.03))]
-        for side: Float in [-1, 1] {
-            lamps.append((SIMD3(side * rearSpan, wingY - 0.06, edge + 0.06), SIMD3(0.034, 0.24, 0.03)))
-        }
-        let tail = makeTailLights(lamps)
-        tail.simdPosition = lower
-        chassis.addChildNode(tail)
-
-        let rim = materials(paint: design.primary, accent: design.accent, light: design.glow,
-                            detailed: false)[Slot.accent.rawValue]
-        let wheels = places.map { p -> SCNNode in
-            let wheel = makeWheel(radius: p.r, width: design.tyreWidth, rim: rim)
-            wheel.simdPosition = SIMD3(p.x, p.r, p.z) + lower
-            chassis.addChildNode(wheel)
-            return wheel
-        }
-        return CarModel(node: chassis, wheels: wheels, radii: places.map(\.r))
+        GarageMesh.build(design.build, glow: design.glow,
+                         markings: Markings(maker: design.maker, number: design.number), livery: design.livery)
     }
 
     static func makeFlames(_ exhausts: [(SIMD3<Float>, Float)], glow: SIMD3<Float>) -> SCNNode {
@@ -421,36 +223,6 @@ enum CarMesh {
             flames.addChildNode(flame)
         }
         return flames
-    }
-
-    /// A fat slick on a bright rim. The carrier node is what the physics turns; a dark
-    /// bar across the rim makes the spin visible.
-    private static func makeWheel(radius: Float, width: Float, rim: SCNMaterial) -> SCNNode {
-        let dark = SCNMaterial()
-        dark.lightingModel = .physicallyBased
-        dark.diffuse.contents = UIColor(white: 0.1, alpha: 1)
-        dark.metalness.contents = 0.9
-        dark.roughness.contents = 0.4
-
-        let carrier = SCNNode()
-        let tyre = SCNCylinder(radius: CGFloat(radius), height: CGFloat(width))
-        tyre.radialSegmentCount = 24
-        tyre.materials = [rubber(treadAround: radius), rubber(), rubber()]
-        let tyreNode = SCNNode(geometry: tyre)
-        tyreNode.eulerAngles = SCNVector3(0, 0, Float.pi / 2)
-        carrier.addChildNode(tyreNode)
-
-        let hub = SCNCylinder(radius: CGFloat(radius * 0.64), height: CGFloat(width + 0.03))
-        hub.radialSegmentCount = 12
-        hub.materials = [dark, rim, rim]
-        let hubNode = SCNNode(geometry: hub)
-        hubNode.eulerAngles = tyreNode.eulerAngles
-        carrier.addChildNode(hubNode)
-
-        let bar = SCNBox(width: CGFloat(width + 0.06), height: CGFloat(radius * 1.2), length: 0.09, chamferRadius: 0)
-        bar.firstMaterial = dark
-        carrier.addChildNode(SCNNode(geometry: bar))
-        return carrier
     }
 
     /// Red, whatever the car's colours: everyone behind reads it the same way.
@@ -518,11 +290,6 @@ enum CarMesh {
 
     static func color(_ c: SIMD3<Float>) -> UIColor {
         UIColor(red: CGFloat(c.x), green: CGFloat(c.y), blue: CGFloat(c.z), alpha: 1)
-    }
-
-    private static func materials(_ design: CarDesign) -> [SCNMaterial] {
-        materials(paint: design.primary, accent: design.accent, light: design.glow,
-                  livery: (design.accent, Int(design.seed % UInt64(ProceduralTextures.carLiveryStyles))))
     }
 
     /// `detailed` lays panel seams, vents and wear over the paint, and `livery` paints racing
