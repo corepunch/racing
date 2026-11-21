@@ -559,7 +559,7 @@ enum ProceduralTextures {
         (abs(fract(u + 0.5) - 0.5) * carTile.x, v * carTile.y)
     }
 
-    /// Painted bodywork: panel seams, fasteners, louvres and hatches under light wear.
+    /// Painted bodywork: a few broad panel gaps and a vent under light wear.
     static let carPanels = carDetail(panels: true, rough: 0.34, seed: 0xCA7)
     /// Bare structure (floor, arms, nozzles): brushed and scuffed, no seams.
     static let carMetal = carDetail(panels: false, rough: 0.45, seed: 0xCA8)
@@ -568,10 +568,10 @@ enum ProceduralTextures {
     private static func carDetail(panels: Bool, rough: Float, seed: UInt64) -> TextureSet {
         let base = MetalBase(seed: seed)
         let length = carTile.y
-        /// Lengthwise seams: two on the deck and a belt line low on the flank.
-        let lanes: [Float] = [0.26, 0.70, carFlank + 0.44]
-        /// Where each lane is cut across: one long panel per copy, staggered between lanes.
-        let cuts: [Float] = [0.50, 1.45, 0.95, 0.30]
+        /// Lengthwise gaps: one down each side of the spine and a belt line low on the flank.
+        let spine: Float = 0.24, belt = carFlank + 0.44
+        /// The one gap across, from the spine gap over the deck edge and down to the belt line.
+        let cut: Float = 1.45
         return bake(width: 1024, height: 512, bump: 2.5) { u, v in
             let m = base.sample(u, v)
             var t = Texel()
@@ -584,29 +584,21 @@ enum ProceduralTextures {
             }
 
             let (a, z) = carSpace(u, v)
-            let lane = a < lanes[0] ? 0 : a < lanes[1] ? 1 : a < lanes[2] ? 2 : 3
-            // Distance to the nearest seam along and across.
-            let along = min(abs(a - lanes[0]), abs(a - lanes[1]), abs(a - lanes[2]))
-            let across = min(abs(z - cuts[lane]), length - abs(z - cuts[lane]))
-            var seam = 1 - smoothstep(0.003, 0.008, min(along, across))
-            // A fastener just inside each panel corner.
-            let bx = along - 0.04, bz = across - 0.04
-            let bolt = 1 - smoothstep(0.007, 0.013, sqrt(bx * bx + bz * bz))
+            var gap = min(abs(a - spine), abs(a - belt))
+            if a > spine && a < belt { gap = min(gap, abs(z - cut), length - abs(z - cut)) }
+            // Everything here is several texels wide with soft edges: a line near one texel
+            // crawls as the car moves, and a sharp groove sparkles under the lacquer.
+            let seam = 1 - smoothstep(0.011, 0.019, gap)
+            let groove = 1 - smoothstep(0.004, 0.028, gap)
+            // Three broad slats let into the deck.
+            let slats = band(fract((z - 0.085) / 0.09) - 0.5, 0.2, 0.07) * box(a - 0.42, z - 0.22, 0.07, 0.135, 0.006)
 
-            // Louvres on the deck and high on the flank, an access hatch, a filler port on the spine.
-            let slats = band(fract((z - 0.08) / 0.055) - 0.5, 0.2, 0.08)
-                * max(box(a - 0.42, z - 0.22, 0.07, 0.135, 0.004), box(a - carFlank - 0.72, z - 1.71, 0.045, 0.135, 0.004))
-            let qx = abs(a - 0.80) - 0.03, qz = abs(z - 1.50) - 0.12
-            let hatch = sqrt(max(qx, 0) * max(qx, 0) + max(qz, 0) * max(qz, 0)) + min(max(qx, qz), 0) - 0.025
-            seam = max(seam, band(hatch, 0.002, 0.004))
-            seam = max(seam, band(sqrt(a * a + (z - 1.05) * (z - 1.05)) - 0.06, 0.002, 0.004))
-
-            // Grime gathers along the seams, so each panel reads as its own piece.
-            shade -= (1 - smoothstep(0, 0.045, min(along, across))) * 0.06
-            shade *= (1 - seam * 0.62) * (1 - slats * 0.78) * (1 - bolt * 0.3)
+            // Grime gathers along the gaps, so each panel reads as its own piece.
+            shade -= (1 - smoothstep(0, 0.06, gap)) * 0.06
+            shade *= (1 - seam * 0.58) * (1 - slats * 0.7)
             t.albedo = SIMD3(repeating: shade)
-            t.rough += seam * 0.4 + slats * 0.4 - bolt * 0.1
-            t.height = -seam * 0.7 - slats * 0.9 + bolt * 0.35
+            t.rough += seam * 0.4 + slats * 0.4
+            t.height = -groove * 0.45 - slats * 0.5
             return t
         }
     }
