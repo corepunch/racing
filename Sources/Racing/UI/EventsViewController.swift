@@ -60,6 +60,7 @@ enum RaceLauncher {
         let car = profile.selectedCar
         var config = RaceConfig(definition: TrackMaps.definition(challenger.track), player: car.design,
                                 rivals: [Entrant(name: challenger.driver, design: challenger.design)])
+        config.isStreetRace = true
         config.laps = 2
         config.difficulty = challenger.isKing ? 2 : 1
         config.assist = profile.assist
@@ -89,7 +90,7 @@ enum RaceLauncher {
 /// Circuit events (entry fee, purse) and the street board (bets and pink slips).
 final class EventsViewController: ScreenController {
     private let profile = Profile.shared
-    private let switcher = SegmentSwitch(["CIRCUIT", "STREET"])
+    private let switcher = SegmentSwitch(["STREET", "CIRCUIT"])
     private let scroll = UIScrollView()
     private let content = UI.stack([], spacing: 12)
     private let carStrip = UIView()
@@ -158,7 +159,7 @@ final class EventsViewController: ScreenController {
         carName.text = car.name
         carBadge.set(car.spec)
         content.arrangedSubviews.forEach { $0.removeFromSuperview() }
-        if switcher.selectedIndex == 0 { buildCircuit() } else { buildStreet() }
+        if switcher.selectedIndex == 0 { buildStreet() } else { buildCircuit() }
         if animated {
             content.alpha = 0
             content.transform = CGAffineTransform(translationX: switcher.selectedIndex == 0 ? -24 : 24, y: 0)
@@ -245,7 +246,7 @@ final class EventsViewController: ScreenController {
     // MARK: - Street
 
     private func buildStreet() {
-        let intro = UI.body("One on one, two laps. Bet credits, or put up your car's pink slip and take theirs. "
+        let intro = UI.body("Illegal night racing. One on one, two laps. Bet credits or race for pink slips. "
                             + "The board changes after every street race.", 13)
         content.addArrangedSubview(intro)
         content.setCustomSpacing(16, after: intro)

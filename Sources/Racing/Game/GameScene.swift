@@ -26,6 +26,7 @@ struct RaceConfig {
     var playerName = "YOU"
     var rivals: [Entrant]
     var laps = 3
+    var isStreetRace = false
     /// Driver assist: slows the car for corners it is too fast for and leans it away from
     /// a barrier at the last moment (`Car.guardSteer`). It never steers along the road.
     var assist = true
@@ -112,6 +113,7 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
     let config: RaceConfig
 
     private(set) var cars: [Car] = []
+    private var contactShadows: [SCNNode] = []
     private var names: [String] = []
     /// Online only: each car's id, and whether another device drives it.
     private var carIDs: [UInt8] = []
@@ -203,7 +205,8 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
     }
 
     private func buildScene() {
-        let theme = track.definition.theme
+        let circuitTheme = track.definition.theme
+        let theme = config.isStreetRace ? circuitTheme.streetNight : circuitTheme
         let sky = ProceduralTextures.sky(theme: theme, seed: track.definition.seed)
         scene.background.contents = sky
         scene.lightingEnvironment.contents = sky
@@ -235,6 +238,14 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
             scene.rootNode.addChildNode(car.node)
             car.install(in: scene.physicsWorld)
             if remote[i] { car.setRemote() }
+        }
+        if config.isStreetRace {
+            contactShadows = cars.map { car in
+                car.installHeadlights()
+                let shadow = Self.makeContactShadow(for: car.design)
+                scene.rootNode.addChildNode(shadow)
+                return shadow
+            }
         }
 
         setupCamera()
@@ -279,14 +290,14 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
         sunLight.intensity   = theme.sunIntensity
         sunLight.castsShadow = true
         sunLight.shadowMode  = .forward
-        sunLight.shadowSampleCount = 1
-        sunLight.shadowRadius = 0
+        sunLight.shadowSampleCount = config.isStreetRace ? 8 : 1
+        sunLight.shadowRadius = config.isStreetRace ? 2 : 0
         sunLight.shadowMapSize = CGSize(width: 2048, height: 2048)
         sunLight.shadowCascadeCount = 4
         sunLight.shadowCascadeSplittingFactor = 0.8
         sunLight.automaticallyAdjustsShadowProjection = true
-        sunLight.maximumShadowDistance = 200
-        sunLight.shadowColor = UIColor(white: 0, alpha: 0.5)
+        sunLight.maximumShadowDistance = config.isStreetRace ? 110 : 200
+        sunLight.shadowColor = UIColor(white: 0, alpha: config.isStreetRace ? 0.85 : 0.5)
         let sunNode          = SCNNode()
         sunNode.light        = sunLight
         sunNode.eulerAngles  = SCNVector3(theme.sunAngles.x, theme.sunAngles.y, 0)
@@ -371,6 +382,30 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
         updateCamera(dt: dt)
         publishHUD()
         if debugDriver != nil { printTelemetry(dt: dt) }
+    }
+
+    func renderer(_ renderer: SCNSceneRenderer, didSimulatePhysicsAtTime time: TimeInterval) {
+        for (car, shadow) in zip(cars, contactShadows) {
+            let pose = car.node.presentation
+            let position = pose.simdWorldPosition
+            // The physics pose is a frame ahead of the car's last measured track distance.
+            let nearby = track.frame(at: car.s)
+            let frame = track.frame(at: car.s + simd_dot(position - nearby.position, nearby.forward))
+            let offset = position - frame.position
+            let height = simd_dot(offset, frame.up)
+            let lateral = simd_dot(offset, frame.right)
+            let contact = min(1, max(0, (1.7 - height) / 1.1))
+            let offDeck = height < -0.5 || abs(lateral) > frame.halfWidth + 0.4
+            shadow.isHidden = car.node.isHidden || offDeck || contact == 0
+            guard !shadow.isHidden else { continue }
+
+            let nose = pose.simdWorldOrientation.act(SIMD3<Float>(0, 0, -1))
+            let heading = atan2(simd_dot(nose, frame.right), simd_dot(nose, frame.forward))
+            let deck = simd_quatf(simd_float3x3(columns: (frame.right, frame.up, -frame.forward)))
+            shadow.simdOrientation = deck * simd_quatf(angle: -heading, axis: SIMD3(0, 1, 0))
+            shadow.simdPosition = position - frame.up * (height - 0.045)
+            shadow.opacity = CGFloat(contact)
+        }
     }
 
     // MARK: - Online
@@ -572,6 +607,40 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
     }
 
     // MARK: - Effects
+
+    private static let contactShadowMaterial: SCNMaterial = {
+        let size = CGSize(width: 64, height: 64)
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        let image = UIGraphicsImageRenderer(size: size, format: format).image { ctx in
+            let colors = [UIColor(white: 0, alpha: 0.94), UIColor(white: 0, alpha: 0.72), UIColor.clear]
+            let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(),
+                                      colors: colors.map(\.cgColor) as CFArray, locations: [0, 0.64, 1])!
+            let centre = CGPoint(x: size.width / 2, y: size.height / 2)
+            ctx.cgContext.drawRadialGradient(gradient, startCenter: centre, startRadius: 0,
+                                             endCenter: centre, endRadius: size.width / 2, options: [])
+        }
+        let material = SCNMaterial()
+        material.lightingModel = .constant
+        material.diffuse.contents = image
+        material.writesToDepthBuffer = false
+        return material
+    }()
+
+    /// The soft shadow close to the deck is still visible under tunnel lighting.
+    private static func makeContactShadow(for design: CarDesign) -> SCNNode {
+        let plane = SCNPlane(width: CGFloat(design.halfWidth * 2 + 0.55),
+                             height: CGFloat(design.frontCollisionExtent + design.rearCollisionExtent + 0.8))
+        plane.firstMaterial = contactShadowMaterial
+        let footprint = SCNNode(geometry: plane)
+        footprint.castsShadow = false
+        footprint.eulerAngles.x = -.pi / 2
+        footprint.position.z = (design.rearCollisionExtent - design.frontCollisionExtent) / 2
+        let shadow = SCNNode()
+        shadow.isHidden = true
+        shadow.addChildNode(footprint)
+        return shadow
+    }
 
     private static let sparkImage: UIImage = {
         UIGraphicsImageRenderer(size: CGSize(width: 8, height: 8)).image { ctx in

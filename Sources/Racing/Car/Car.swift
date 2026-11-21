@@ -96,6 +96,59 @@ final class Car {
         node = model.node
     }
 
+    private static let headlightColor = UIColor(red: 0.84, green: 0.93, blue: 1, alpha: 1)
+
+    /// The steeper rays are dimmer to balance how quickly light falls off along the deck.
+    private static let headlightPattern = ProceduralTextures.image(width: 128, height: 128) { u, v in
+        let spread = 1 - smoothstep(0.14, 0.29, abs(u - 0.5))
+        let elevation = abs(v - 0.5)
+        let cutoff = 1 - smoothstep(0.31, 0.49, elevation)
+        let transmission = cutoff / (1 + pow(elevation / 0.026, 2.55))
+        // Encode the transmission in the image's sRGB colour space.
+        return SIMD3(repeating: pow(spread * transmission, 1 / 2.2))
+    }
+
+    private static let headlightLens: SCNMaterial = {
+        let material = SCNMaterial()
+        material.lightingModel = .constant
+        material.diffuse.contents = UIColor.black
+        material.emission.contents = headlightColor
+        material.emission.intensity = 2
+        return material
+    }()
+
+    func installHeadlights() {
+        guard !model.headlightMounts.isEmpty else { return }
+        var beamOrigin = SIMD3<Float>.zero
+        for mount in model.headlightMounts {
+            let lens = SCNBox(width: CGFloat(mount.size.x * 0.88), height: CGFloat(mount.size.y * 0.76),
+                              length: 0.015, chamferRadius: 0.006)
+            lens.firstMaterial = Self.headlightLens
+            let fixture = SCNNode(geometry: lens)
+            fixture.simdPosition = mount.centre - SIMD3(0, 0, mount.size.z / 2 + 0.009)
+            fixture.castsShadow = false
+            node.addChildNode(fixture)
+            beamOrigin += fixture.simdPosition
+        }
+
+        // Both lenses share one beam so their light blends from the nose onward.
+        let light = SCNLight()
+        light.type = .spot
+        light.color = Self.headlightColor
+        light.intensity = 13200
+        light.spotInnerAngle = 66
+        light.spotOuterAngle = 86
+        light.attenuationStartDistance = 3
+        light.attenuationEndDistance = 95
+        light.attenuationFalloffExponent = 0.85
+        light.categoryBitMask = TrackMeshBuilder.headlightReceiverMask
+        light.gobo?.contents = Self.headlightPattern
+        let projector = SCNNode()
+        projector.light = light
+        projector.simdPosition = beamOrigin / Float(model.headlightMounts.count)
+        node.addChildNode(projector)
+    }
+
     // MARK: - Physics set-up
 
     func install(in world: SCNPhysicsWorld) {

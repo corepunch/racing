@@ -77,7 +77,11 @@ enum GarageMesh {
             car.addChildNode(node)
             return node
         }
-        return CarModel(node: car, wheels: wheels, radii: radii)
+        let frontOffset = SIMD3<Float>(0, -CarMesh.axleHeight, -size.end)
+        let mounts = frontLights(build.part(at: .front) ?? .needle).map {
+            CarMesh.HeadlightMount(centre: $0.centre + frontOffset, size: $0.size)
+        }
+        return CarModel(node: car, wheels: wheels, radii: radii, headlightMounts: mounts)
     }
 
     static func preview(_ part: CarPart) -> SCNNode {
@@ -222,6 +226,25 @@ enum GarageMesh {
         }
     }
 
+    private static func frontLights(_ part: CarPart) -> [CarMesh.HeadlightMount] {
+        let centre: SIMD3<Float>
+        let size: SIMD3<Float>
+        switch part {
+        case .plow:
+            centre = SIMD3(0.62, 0.405, -0.665)
+            size = SIMD3(0.24, 0.034, 0.057)
+        case .fork:
+            centre = SIMD3(0.77, 0.43, -0.873)
+            size = SIMD3(0.24, 0.038, 0.032)
+        default:
+            centre = SIMD3(0.17, 0.366, -0.403)
+            size = SIMD3(0.11, 0.027, 0.03)
+        }
+        return [-centre.x, centre.x].map {
+            CarMesh.HeadlightMount(centre: SIMD3($0, centre.y, centre.z), size: size)
+        }
+    }
+
     private static func front(_ part: CarPart, shell: inout Shell) {
         switch part {
         case .plow:
@@ -230,9 +253,6 @@ enum GarageMesh {
                 (-0.46, 0.87, 0.26, 0.66), (-0.26, 0.48, 0.27, 0.62), (0.14, 0.30, 0.32, 0.51),
             ])
             panel(&shell, .metal, [(-0.731, 0.46, 0.28, 0.35), (-0.62, 0.53, 0.27, 0.43)])
-            for side: Float in [-1, 1] {
-                shell.box(.glow, centre: SIMD3(side * 0.62, 0.405, -0.665), size: SIMD3(0.24, 0.034, 0.057))
-            }
         case .fork:
             panel(&shell, .metal, [
                 (-0.61, 0.91, 0.29, 0.41), (-0.46, 0.86, 0.31, 0.48), (0.14, 0.29, 0.32, 0.50),
@@ -241,8 +261,6 @@ enum GarageMesh {
                 panel(&shell, .paint, x: side * 0.77, [
                     (-0.87, 0.26, 0.31, 0.47), (-0.69, 0.39, 0.29, 0.61), (-0.45, 0.28, 0.32, 0.67),
                 ])
-                shell.box(.glow, centre: SIMD3(side * 0.77, 0.43, -0.873),
-                          size: SIMD3(0.24, 0.038, 0.032))
                 shell.box(.accent, centre: SIMD3(side * 0.77, 0.603, -0.60),
                           size: SIMD3(0.16, 0.038, 0.17))
             }
@@ -251,11 +269,8 @@ enum GarageMesh {
                 (-0.40, 0.31, 0.28, 0.39), (-0.29, 0.54, 0.28, 0.44), (0.14, 0.37, 0.30, 0.52),
             ])
             shell.box(.metal, centre: SIMD3(0, 0.29, -0.22), size: SIMD3(0.86, 0.099, 0.22))
-            for side: Float in [-1, 1] {
-                shell.box(.glow, centre: SIMD3(side * 0.17, 0.366, -0.403),
-                          size: SIMD3(0.11, 0.027, 0.03))
-            }
         }
+        for lamp in frontLights(part) { shell.box(.glow, centre: lamp.centre, size: lamp.size) }
         if part.attachment != nil { mountPads(&shell, mount: addonMount(for: part), span: 0.33) }
     }
 

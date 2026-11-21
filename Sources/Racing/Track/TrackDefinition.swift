@@ -251,6 +251,23 @@ struct TrackTheme {
     var ambient: CGFloat
     var environment: CGFloat
 
+    /// Street races use the circuit's markings and scenery under a darker sky and a cooler key light.
+    var streetNight: TrackTheme {
+        var night = self
+        night.skyZenith = SIMD3(0.052, 0.064, 0.11)
+        night.skyHorizon = SIMD3(0.075, 0.104, 0.18)
+        night.skyGlow = SIMD3(0.16, 0.24, 0.43)
+        night.stars = 0.28
+        night.fogStart = 110
+        night.fogEnd = 850
+        night.sunColor = SIMD3(0.77, 0.85, 1)
+        night.sunIntensity = 975
+        night.sunAngles.x = -.pi / 3
+        night.ambient = 125
+        night.environment = 0.75
+        return night
+    }
+
     static let neonNight = TrackTheme(
         edge: .kerb,
         skyZenith: SIMD3(0.015, 0.02, 0.07), skyHorizon: SIMD3(0.17, 0.07, 0.26),

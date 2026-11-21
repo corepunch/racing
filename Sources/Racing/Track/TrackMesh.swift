@@ -72,6 +72,8 @@ enum TrackSections {
 /// Sweeps a closed hull cross-section along the path: deck, glowing gutters,
 /// slanted barriers and a keeled underside, textured section by section.
 enum TrackMeshBuilder {
+    /// Headlights illuminate the deck and enclosures without lighting the city or car bodies.
+    static let headlightReceiverMask = 1 << 1
     /// Distance from the painted deck edge to the invisible collision wall.
     static let barrierOffset: Float = 0.55
 
@@ -245,6 +247,7 @@ enum TrackMeshBuilder {
 
         let node = SCNNode(geometry: mesh.geometry(materials: materials))
         node.name = "trackMesh"
+        node.categoryBitMask |= headlightReceiverMask
         let body = SCNPhysicsBody(type: .static, shape: SCNPhysicsShape(
             geometry: collisionGeometry(path: path),
             options: [.type: SCNPhysicsShape.ShapeType.concavePolyhedron]))

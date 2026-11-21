@@ -7,6 +7,7 @@ struct CarModel {
     let node: SCNNode
     let wheels: [SCNNode]
     let radii: [Float]
+    let headlightMounts: [CarMesh.HeadlightMount]
 }
 
 /// Turns a `CarDesign` into its model, and holds what every car's bodywork is made with: the
@@ -20,6 +21,11 @@ enum CarMesh {
     private static let clearance: Float = 0.3
 
     enum Slot: Int, CaseIterable { case paint, accent, metal, glass, glow }
+
+    struct HeadlightMount {
+        let centre: SIMD3<Float>
+        let size: SIMD3<Float>
+    }
 
     /// What a car carries in lettering: its maker's name and its race number.
     struct Markings {
