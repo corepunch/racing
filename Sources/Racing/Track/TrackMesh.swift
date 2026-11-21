@@ -72,6 +72,8 @@ enum TrackSections {
 /// Sweeps a closed hull cross-section along the path: deck, glowing gutters,
 /// slanted barriers and a keeled underside, textured section by section.
 enum TrackMeshBuilder {
+    /// Distance from the painted deck edge to the invisible collision wall.
+    static let barrierOffset: Float = 0.55
 
     /// Profile point: x = halfWidth * `scale` + `offset`, y above the deck.
     private struct Point {
@@ -79,7 +81,7 @@ enum TrackMeshBuilder {
         func position(_ halfWidth: Float) -> SIMD2<Float> { SIMD2(halfWidth * scale + offset, y) }
     }
 
-    private enum Kind { case deck, gutter, wallRight, wallLeft, hull, belly, barrier, tunnelWall, tunnelLight }
+    private enum Kind { case deck, gutter, wallRight, wallLeft, hull, belly, tunnelWall, tunnelLight }
     private typealias Piece = (a: Point, b: Point, kind: Kind)
 
     private static let wallHeight: Float = 1.3
@@ -125,9 +127,6 @@ enum TrackMeshBuilder {
             (p(-1, -1.4, wallHeight), p(-1, -0.8, wallHeight), .hull),
             (p(-1, -0.8, wallHeight), p(-1, -0.4, 0), .wallLeft),
             (p(-1, -0.4, 0), p(-1, 0, 0), .gutter),
-            // Invisible catch fences above the barriers, collision only.
-            (p(1, 0.8, wallHeight), p(1, 0.8, 6), .barrier),
-            (p(-1, -0.8, 6), p(-1, -0.8, wallHeight), .barrier),
         ]
     }()
 
@@ -139,9 +138,8 @@ enum TrackMeshBuilder {
     private static let gutterSlot = DeckPattern.allCases.count + WallPattern.allCases.count
     private static let hullSlot = gutterSlot + 1
     private static let bellySlot = gutterSlot + 2
-    private static let barrierSlot = gutterSlot + 3
-    private static let tunnelWallSlot = gutterSlot + 4
-    private static let tunnelLightSlot = gutterSlot + 5
+    private static let tunnelWallSlot = gutterSlot + 3
+    private static let tunnelLightSlot = gutterSlot + 4
 
     static func buildTrackNode(path: TrackPath) -> SCNNode {
         let theme = path.definition.theme, seed = path.definition.seed
@@ -181,7 +179,7 @@ enum TrackMeshBuilder {
                         } else {
                             ua.x = (a.y - wallHeight) / 8; ub.x = (b.y - wallHeight) / 8
                         }
-                    case .wallRight, .gutter, .barrier, .tunnelLight: break
+                    case .wallRight, .gutter, .tunnelLight: break
                     }
                     current.append((mesh.vertex(pa, normal, ua), mesh.vertex(pb, normal, ub)))
                 }
@@ -194,7 +192,6 @@ enum TrackMeshBuilder {
                         case .gutter: slot = gutterSlot
                         case .hull: slot = hullSlot
                         case .belly: slot = bellySlot
-                        case .barrier: slot = barrierSlot
                         case .tunnelWall: slot = tunnelWallSlot
                         case .tunnelLight: slot = tunnelLightSlot
                         }
@@ -241,16 +238,15 @@ enum TrackMeshBuilder {
         materials.append(gutter)
         materials.append(hullMaterial(theme: theme, seed: seed))
         materials.append(ProceduralTextures.belly(theme: theme, seed: seed &+ 61).material(name: "belly", glow: 1.6))
-        materials.append(SCNMaterial())
         materials.append(ProceduralTextures.tunnelWall(theme: theme, seed: seed &+ 62)
             .material(name: "tunnel-wall", glow: 2.2))
         materials.append(ProceduralTextures.tunnelLight(theme: theme, seed: seed &+ 63)
             .material(name: "tunnel-light", glow: 3.2))
 
-        let node = SCNNode(geometry: mesh.geometry(materials: materials, skipping: [barrierSlot]))
+        let node = SCNNode(geometry: mesh.geometry(materials: materials))
         node.name = "trackMesh"
         let body = SCNPhysicsBody(type: .static, shape: SCNPhysicsShape(
-            geometry: mesh.collisionGeometry(),
+            geometry: collisionGeometry(path: path),
             options: [.type: SCNPhysicsShape.ShapeType.concavePolyhedron]))
         body.categoryBitMask = PhysicsCategory.track
         body.collisionBitMask = PhysicsCategory.car
@@ -260,6 +256,28 @@ enum TrackMeshBuilder {
         root.name = "trackRoot"
         root.addChildNode(node)
         return root
+    }
+
+    /// The barriers are perpendicular to the driving surface, so their impact stays across the deck.
+    private static func collisionGeometry(path: TrackPath) -> SCNGeometry {
+        var mesh = MeshBuilder(materialCount: 1)
+        let rows = path.samples.map { sample in
+            let edge = sample.right * (sample.halfWidth + barrierOffset)
+            let left = sample.position - edge
+            let right = sample.position + edge
+            let top = sample.up * 6
+            let foot = sample.up
+            return (left: mesh.vertex(left, .zero), right: mesh.vertex(right, .zero),
+                    leftTop: mesh.vertex(left + top, .zero), leftBottom: mesh.vertex(left - foot, .zero),
+                    rightTop: mesh.vertex(right + top, .zero), rightBottom: mesh.vertex(right - foot, .zero))
+        }
+        for i in rows.indices {
+            let a = rows[i], b = rows[(i + 1) % rows.count]
+            mesh.quad(0, a.left, a.right, b.right, b.left)
+            mesh.quad(0, a.leftTop, a.leftBottom, b.leftBottom, b.leftTop)
+            mesh.quad(0, a.rightBottom, a.rightTop, b.rightTop, b.rightBottom)
+        }
+        return mesh.collisionGeometry()
     }
 
     /// Structural plating shared by the track hull, pylons and gates (UVs in units of 8 m).

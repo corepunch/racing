@@ -86,6 +86,9 @@ final class Car {
     private var wrongWayTime: Float = 0
     private var stallTime: Float = 0
     private var stallMark: Float = 0
+    private var wallImpactSeverity: Float = 0
+
+    private var collisionHalfWidth: Float { design.halfWidth + 0.15 }
 
     init(design: CarDesign) {
         self.design = design
@@ -97,9 +100,9 @@ final class Car {
 
     func install(in world: SCNPhysicsWorld) {
         self.world = world
-        // A box over the whole car, a little wider than the tyres so they stay off the sloping barriers,
+        // A box over the whole car, a little wider than the tyres so they stay off the barriers,
         // and clear of the road so only the wheels touch it.
-        let box = SCNBox(width: CGFloat(design.halfWidth * 2 + 0.3), height: 0.6,
+        let box = SCNBox(width: CGFloat(collisionHalfWidth * 2), height: 0.6,
                          length: CGFloat(design.frontCollisionExtent + design.rearCollisionExtent),
                          chamferRadius: 0.12)
         let midpoint = (design.rearCollisionExtent - design.frontCollisionExtent) / 2
@@ -115,6 +118,7 @@ final class Car {
         body.restitution = 0
         body.damping = 0.02
         body.angularDamping = 0.7
+        body.continuousCollisionDetectionThreshold = 0.4
         node.physicsBody = body
 
         let wheels = zip(model.wheels, model.radii).map { wheelNode, radius -> SCNPhysicsVehicleWheel in
@@ -207,6 +211,7 @@ final class Car {
         let frame = track.frame(at: distance)
         speed = 0; heading = 0; lateralSpeed = 0
         reversing = false; scraping = false; smoothSteer = 0; yawRate = 0
+        wallImpactSeverity = 0
         stuckTime = 0; flippedTime = 0; wrongWayTime = 0; stallTime = 0; stallMark = progress
         setPose(frame, lateral: lateral, lift: 0.6)
         node.physicsBody?.velocity = SCNVector3Zero
@@ -248,8 +253,18 @@ final class Car {
     /// assist: see `guardSteer`.
     func step(dt: Float, input: CarInput, track: TrackPath, hold: Bool = false, wallGuard: Float = 0) {
         guard let vehicle = vehicle, let body = node.physicsBody else { return }
+        let previousLateralSpeed = lateralSpeed
         let frame = sense(track: track, body: body)
         boost = max(0, boost - dt)
+        wallImpactSeverity = max(0, wallImpactSeverity - dt * 3)
+
+        let wallSide: Float = d > 0 ? 1 : -1
+        let wallGap = wallLimit(frame, side: wallSide) - abs(d)
+        let impactSpeed = max(previousLateralSpeed * wallSide, lateralSpeed * wallSide)
+        let glancing = abs(sin(heading)) < 0.22 && impactSpeed < 8 && wallImpactSeverity < 0.15
+        let touching = wallGap <= (glancing ? 0.26 : 0)
+        if touching, !scraping, impactSpeed > 2 { pendingHit = max(pendingHit, impactSpeed) }
+        scraping = touching
 
         if !hold, recoverIfNeeded(dt: dt, input: input, frame: frame, track: track) { return }
 
@@ -293,22 +308,41 @@ final class Car {
         let amount = simd_length(tilt)
         if amount > 1e-4 {
             let axis = tilt / amount
-            body.applyTorque(SCNVector4(axis.x, axis.y, axis.z, amount * 42_000), asImpulse: false)
+            let rightingTorque: Float = scraping ? 105_000 : 42_000
+            body.applyTorque(SCNVector4(axis.x, axis.y, axis.z, amount * rightingTorque), asImpulse: false)
         }
         stabilise(body: body, up: up, transform: transform, steering: Float(steering))
         // Barriers deflect: while the bodywork is on a wall with the nose pointing into it,
         // the wall turns the car back along the road instead of stopping it dead.
         if scraping, !hold {
-            let side: Float = d > 0 ? 1 : -1
-            let into = max(0, min(0.7, heading * side))
+            let into = max(0, min(0.7, heading * wallSide))
             if into > 0.01 {
-                let axis = up * side
+                let axis = up * wallSide
                 body.applyTorque(SCNVector4(axis.x, axis.y, axis.z, into * 60_000), asImpulse: false)
             }
-            // Grinding along a barrier is never the quick way round: it drags, less so with armour.
             let v = body.velocity
-            let drag = Float(Self.mass) * 0.4 * (1 - 0.5 * spec.armor)
-            body.applyForce(SCNVector3(-Float(v.x) * drag, -Float(v.y) * drag, -Float(v.z) * drag), asImpulse: false)
+            let originalVelocity = SIMD3(Float(v.x), Float(v.y), Float(v.z))
+            var velocity = originalVelocity
+            if glancing {
+                // Take out the motion into the barrier before the chassis catches on a triangle edge.
+                let outwardLimit = max(-0.9, (wallGap - 0.18) * 8)
+                let outward = simd_dot(velocity, frame.right) * wallSide
+                velocity -= frame.right * (max(0, outward - outwardLimit) * wallSide)
+            }
+            // Keep the small suspension bounce, but stop a wheel riding up the wall.
+            let height = simd_dot(worldPosition - frame.position, frame.up)
+            let lift = simd_dot(velocity, frame.up)
+            let liftLimit = max(0, (0.9 - height) * 6)
+            if lift > liftLimit {
+                velocity -= frame.up * (lift - liftLimit)
+            }
+            if velocity != originalVelocity { body.velocity = SCNVector3(velocity.x, velocity.y, velocity.z) }
+            // Braking along the wall depends on the speed into it. After a hit, it eases back to a light scrape.
+            wallImpactSeverity = max(wallImpactSeverity, smoothstep(3.5, 19, impactSpeed))
+            let drag = Float(Self.mass) * mix(0.065, 0.4, wallImpactSeverity) * (1 - 0.5 * spec.armor)
+            let alongWall = simd_dot(velocity, frame.forward)
+            let friction = -frame.forward * (alongWall * drag)
+            body.applyForce(SCNVector3(friction.x, friction.y, friction.z), asImpulse: false)
         }
 
         let engineForce = Self.mass * CGFloat(spec.thrust)
@@ -361,7 +395,7 @@ final class Car {
     private func guardSteer(frame: PathSample) -> Float {
         guard abs(lateralSpeed) > 1.5, abs(heading) < 1.2 else { return 0 }
         let side: Float = lateralSpeed > 0 ? 1 : -1
-        let room = max(0, wallLimit(frame) - d * side)
+        let room = max(0, wallLimit(frame, side: side) - d * side)
         let timeToWall = room / abs(lateralSpeed)
         let window: Float = 0.55
         guard timeToWall < window else { return 0 }
@@ -369,7 +403,12 @@ final class Car {
     }
 
     /// Offset from the centre line at which the bodywork meets the barrier.
-    private func wallLimit(_ frame: PathSample) -> Float { frame.halfWidth + 0.35 - design.halfWidth }
+    private func wallLimit(_ frame: PathSample, side: Float) -> Float {
+        let towardWall = sin(heading) * side
+        let overhang = towardWall >= 0 ? design.frontCollisionExtent : design.rearCollisionExtent
+        let reach = collisionHalfWidth * abs(cos(heading)) + overhang * abs(towardWall)
+        return frame.halfWidth + TrackMeshBuilder.barrierOffset - reach - 0.05
+    }
 
     /// Reads the pose SceneKit simulated and works out where that is on the circuit.
     private func sense(track: TrackPath, body: SCNPhysicsBody) -> PathSample {
@@ -408,11 +447,6 @@ final class Car {
         heading = atan2(simd_dot(forward, frame.right), simd_dot(forward, frame.forward))
         upright = simd_dot(up, frame.up)
 
-        // Barrier contact, for sparks and haptics: the first frame the bodywork reaches the wall.
-        let touching = abs(d) > wallLimit(frame)
-        let side: Float = d > 0 ? 1 : -1
-        if touching, !scraping, lateralSpeed * side > 2 { pendingHit = max(pendingHit, lateralSpeed * side) }
-        scraping = touching
         lateralSpeed = simd_dot(velocity, frame.right)
         return frame
     }
@@ -436,7 +470,7 @@ final class Car {
             stallTime = 0
             stallMark = progress
         }
-        let fallen = worldPosition.y < frame.position.y - 25
+        let fallen = simd_dot(worldPosition - frame.position, frame.up) < -0.5
         guard fallen || stalled || flippedTime > 1 || stuckTime > 1.5 || wrongWayTime > 2 else { return false }
         let room = frame.halfWidth - design.halfWidth - 1.5
         teleport(to: s, lateral: max(-room, min(room, d)), track: track)
