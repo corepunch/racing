@@ -24,8 +24,7 @@ final class ShowroomView: SCNView, UIGestureRecognizerDelegate {
     private var link: CADisplayLink?
     private(set) var index = 0
 
-    /// Called as soon as a different podium is front and centre, during a drag too, so the
-    /// labels underneath keep up with the finger.
+    /// Called as soon as a different podium is front and centre, even during a drag.
     var onIndexChange: ((Int) -> Void)?
     /// Called when the row comes to rest.
     var onSettle: ((Int) -> Void)?
@@ -44,7 +43,7 @@ final class ShowroomView: SCNView, UIGestureRecognizerDelegate {
         // The studio fills the shadows and puts reflections in the paint; the key light below
         // does the lighting, so each car has a bright side, a dark side and a shadow.
         scene.lightingEnvironment.contents = ProceduralTextures.studio
-        scene.lightingEnvironment.intensity = 0.3
+        scene.lightingEnvironment.intensity = 0.15
         self.scene = scene
 
         let floor = SCNFloor()

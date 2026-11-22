@@ -603,14 +603,9 @@ enum ProceduralTextures {
         }
     }
 
-    /// Shading for canopy glass, laid along the canopy (u, nose first) and up it (v): dark low
-    /// down, lighter towards the crown, with streaks of reflection slanting back across it. Two
-    /// cross the windscreen and one the rear glass, which is the face a chasing camera sees.
-    static let canopy: UIImage = image(width: 256, height: 128) { u, v in
-        let slant = u - 0.3 * v
-        let streak = max(band(slant - 0.13, 0.07, 0.02), band(slant - 0.30, 0.025, 0.015) * 0.8,
-                         band(slant - 0.64, 0.07, 0.02) * 0.85)
-        return SIMD3(repeating: mix(mix(0.2, 0.6, smoothstep(0.1, 1, v)), 1, streak))
+    /// Smoked tint lightens towards the crown. Highlights come from the scene environment.
+    static let canopy: UIImage = image(width: 4, height: 64) { _, v in
+        SIMD3(repeating: mix(0.26, 0.64, smoothstep(0.1, 1, v)))
     }
 
     static let carLiveryStyles = 3
@@ -732,14 +727,28 @@ enum ProceduralTextures {
 
     // MARK: - Studio
 
-    /// Equirectangular studio for the menus: a soft glow overhead, a blue horizon and two strip
-    /// lights, whose reflections sliding over the bodywork are what make paint read as metal.
-    static let studio: UIImage = image(width: 256, height: 128) { u, v in
-        let top = smoothstep(0.45, 0.02, v)
-        let horizon = exp(-pow((v - 0.5) * 9, 2))
-        let strip = band(v - 0.21, 0.04, 0.012) * max(band(u - 0.22, 0.13, 0.012), band(u - 0.72, 0.13, 0.012))
-        return SIMD3(0.9, 0.95, 1) * (top * 0.55 + strip) + SIMD3(0.1, 0.45, 0.9) * horizon * 0.7
-            + SIMD3(0.03, 0.04, 0.07)
+    /// Softboxes on the ceiling and two walls of a dark photographic studio.
+    /// Project rays onto flat panels so their edges stay straight in the reflected room.
+    static let studio: UIImage = image(width: 512, height: 256) { u, v in
+        let azimuth = 2 * Float.pi * u, polar = Float.pi * v
+        let ray = SIMD3(sin(polar) * cos(azimuth), cos(polar), sin(polar) * sin(azimuth))
+        var light = SIMD3<Float>(0.043, 0.050, 0.062)
+        if ray.y > 0 {
+            let x = ray.x / ray.y, z = ray.z / ray.y
+            let ceiling = box(x + 0.30, z, 0.48, 1.45, 0.075)
+            light += SIMD3(0.95, 0.94, 0.90) * ceiling
+        }
+        if ray.x > 0 {
+            let z = ray.z / ray.x, y = ray.y / ray.x
+            let strip = box(z + 0.15, y - 0.38, 1.55, 0.14, 0.035)
+            light += SIMD3(0.88, 0.93, 0.98) * strip
+        }
+        if ray.z < 0 {
+            let x = ray.x / -ray.z, y = ray.y / -ray.z
+            let upright = box(x + 0.62, y - 0.36, 0.19, 0.58, 0.055)
+            light += SIMD3(0.72, 0.77, 0.82) * upright
+        }
+        return light
     }
 
     // MARK: - Tunnels and halls

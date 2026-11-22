@@ -365,7 +365,8 @@ final class LobbyViewController: ScreenController {
         case .loading, .countdown, .racing: break
         case .results: return
         }
-        guard !raceShown, game == nil, presentedViewController == nil, myCar?.inRace == true else { return }
+        guard !raceShown, game == nil, presentedViewController == nil, myCar?.inRace == true,
+              let window = view.window else { return }
         raceShown = true
 
         let settings = client.settings
@@ -411,7 +412,7 @@ final class LobbyViewController: ScreenController {
         game.onLeave = { [weak self] in self?.leave() }
         game.debugDriver = UserDefaults.standard.string(forKey: "driver").flatMap(GameScene.DebugDriver.init(rawValue:))
         self.game = game
-        present(game, animated: true)
+        game.start(in: window)
     }
 
     // MARK: - Leaving
@@ -435,7 +436,7 @@ final class LobbyViewController: ScreenController {
     private func disconnected(_ reason: String) {
         client.onChange = nil
         UIApplication.shared.isIdleTimerDisabled = false
-        if let game, game.presentingViewController != nil {
+        if let game, game.viewIfLoaded?.window?.rootViewController === game {
             game.onLeave = { [weak self] in self?.navigationController?.popViewController(animated: true) }
             game.connectionLost(reason)
             return

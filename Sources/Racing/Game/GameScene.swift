@@ -229,7 +229,7 @@ final class GameScene: NSObject, SCNSceneRendererDelegate, SCNPhysicsContactDele
         let sky = ProceduralTextures.sky(theme: theme, seed: track.definition.seed)
         scene.background.contents = sky
         scene.lightingEnvironment.contents = sky
-        scene.lightingEnvironment.intensity = theme.environment
+        scene.lightingEnvironment.intensity = theme.environment * 0.5
         scene.fogStartDistance = theme.fogStart
         scene.fogEndDistance = theme.fogEnd
         scene.fogDensityExponent = 1.4
@@ -327,7 +327,7 @@ final class GameScene: NSObject, SCNSceneRendererDelegate, SCNPhysicsContactDele
         let ambLight         = SCNLight()
         ambLight.type        = .ambient
         ambLight.color       = Self.color(simd_mix(theme.skyHorizon, SIMD3(repeating: 1), SIMD3(repeating: 0.4)))
-        ambLight.intensity   = theme.ambient
+        ambLight.intensity   = theme.ambient * 0.5
         let ambNode          = SCNNode()
         ambNode.light        = ambLight
         scene.rootNode.addChildNode(ambNode)
@@ -518,7 +518,7 @@ final class GameScene: NSObject, SCNSceneRendererDelegate, SCNPhysicsContactDele
                 }
                 // The assist also lifts and brakes for corners that are too tight for this speed.
                 // It leaves the steering alone.
-                if config.assist {
+                if config.assist && !input.handbrake {
                     let limit = RivalDriver.cornerSpeed(for: car, track: track, grip: 62)
                     if car.speed > limit { input.throttle = 0 }
                     if car.speed > limit + 5 { input.brake = max(input.brake, 0.7) }
@@ -634,7 +634,7 @@ final class GameScene: NSObject, SCNSceneRendererDelegate, SCNPhysicsContactDele
         state.speedKMH = player.speed * 3.6
         state.engineRunning = player.finishTime == nil
         let slipSpeed = abs(player.lateralSpeed - player.speed * sin(player.heading))
-        state.skidding = state.engineRunning ? min(1, max(0, (slipSpeed - 3) / 10)) : 0
+        state.skidding = state.engineRunning ? min(1, max(player.lockedWheelSkid, (slipSpeed - 3) / 10)) : 0
         state.laps = config.laps
         state.lap = min(config.laps, max(1, lapsDone.first.map { $0 + 1 } ?? 1))
         state.position = (order.firstIndex { $0 === player } ?? 0) + 1

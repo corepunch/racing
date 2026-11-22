@@ -11,7 +11,7 @@ struct CarModel {
 }
 
 /// Turns a `CarDesign` into its model, and holds what every car's bodywork is made with: the
-/// faceted shell, its materials, the plumes and the lights. Nose points along −Z. The node's
+/// lofted shell, its materials, the plumes and the lights. Nose points along −Z. The node's
 /// origin is `axleHeight` above the road, between the axles.
 enum CarMesh {
 
@@ -33,7 +33,7 @@ enum CarMesh {
         let number: Int
     }
 
-    /// Flat-shaded faces that always wind outward from a reference point.
+    /// Shell faces wind outward from a reference point.
     struct Shell {
         var mesh = MeshBuilder(materialCount: Slot.allCases.count)
         /// Where this shell sits on the car, so textures run on from one part to the next.
@@ -166,14 +166,27 @@ enum CarMesh {
         }
     }
 
-    /// Six-sided body section: flat roof, chine at the widest point, narrower floor.
+    /// A flat deck between elliptical shoulders, with a tighter radius below the beltline.
+    /// The first two points bound the deck so lettering can sit flush on it.
     static func section(x: Float = 0, z: Float, halfWidth w: Float, top: Float, bottom: Float = clearance,
-                                chine: Float = 0.45, roof: Float = 0.4) -> [SIMD3<Float>] {
-        let yc = bottom + (top - bottom) * chine
-        return [
-            SIMD3(x - w * roof, top, z), SIMD3(x + w * roof, top, z), SIMD3(x + w, yc, z),
-            SIMD3(x + w * 0.7, bottom, z), SIMD3(x - w * 0.7, bottom, z), SIMD3(x - w, yc, z),
-        ]
+                        chine: Float = 0.45, roof: Float = 0.4) -> [SIMD3<Float>] {
+        let belt = bottom + (top - bottom) * chine
+        let deck = w * min(roof, 0.88)
+        let floor = w * 0.70
+        var side = [SIMD2(deck, top)]
+        for i in 1..<5 {
+            let angle = Float(i) * .pi / 10
+            side.append(SIMD2(deck + (w - deck) * sin(angle), belt + (top - belt) * cos(angle)))
+        }
+        side.append(SIMD2(w, belt))
+        for i in 1..<3 {
+            let angle = Float(i) * .pi / 6
+            side.append(SIMD2(floor + (w - floor) * cos(angle), belt - (belt - bottom) * sin(angle)))
+        }
+        side.append(SIMD2(floor, bottom))
+        let right = side.map { SIMD3(x + $0.x, $0.y, z) }
+        let left = side.reversed().map { SIMD3(x - $0.x, $0.y, z) }
+        return [SIMD3(x - deck, top, z)] + right + left.dropLast()
     }
 
     /// One flat-ish face of a lofted body: its middle, the way it faces, and its size in the
@@ -287,8 +300,7 @@ enum CarMesh {
         return m
     }
 
-    /// Canopy glass in a deep shade of the car's light colour. Its reflections are painted on,
-    /// so it reads as glass in a dark hall as well as under an open sky.
+    /// Tinted glass with a polished surface that reflects the surrounding scene.
     static func glass(tint light: SIMD3<Float>) -> SCNMaterial {
         let m = SCNMaterial()
         m.lightingModel = .physicallyBased

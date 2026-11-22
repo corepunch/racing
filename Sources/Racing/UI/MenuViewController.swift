@@ -70,10 +70,12 @@ final class MenuViewController: ScreenController {
         let tiles = UI.stack([garageTile, dealerTile, onlineTile], axis: .horizontal, spacing: 10)
         tiles.distribution = .fillEqually
 
-        let actions = UI.scrollColumn(UI.stack([race, tiles], spacing: 10), centered: true)
-        let preview = UI.stack([showroom, dots, info], spacing: 6)
-        showroom.setContentHuggingPriority(.init(1), for: .vertical)
-        let columns = UI.columns(preview, actions, leadingShare: 0.53, spacing: 24)
+        let controls = UI.stack([race, tiles], spacing: 10)
+        let details = UI.scrollColumn(UI.stack([info, controls], spacing: 14), centered: true)
+        let preview = UIView()
+        preview.addSubview(showroom)
+        preview.addSubview(dots)
+        let columns = UI.columns(preview, details, leadingShare: 0.53, spacing: 24)
         carName.adjustsFontSizeToFitWidth = true
         carName.minimumScaleFactor = 0.65
 
@@ -94,9 +96,15 @@ final class MenuViewController: ScreenController {
             columns.leadingAnchor.constraint(equalTo: brand.leadingAnchor),
             columns.trailingAnchor.constraint(equalTo: topRight.trailingAnchor),
             columns.bottomAnchor.constraint(equalTo: safe.bottomAnchor, constant: -8),
-            showroom.heightAnchor.constraint(greaterThanOrEqualToConstant: 70),
-            race.heightAnchor.constraint(equalToConstant: 62),
-            tiles.heightAnchor.constraint(equalToConstant: 88),
+            showroom.topAnchor.constraint(equalTo: preview.topAnchor),
+            showroom.leadingAnchor.constraint(equalTo: preview.leadingAnchor),
+            showroom.trailingAnchor.constraint(equalTo: preview.trailingAnchor),
+            showroom.centerYAnchor.constraint(equalTo: view.centerYAnchor),
+            dots.topAnchor.constraint(equalTo: showroom.bottomAnchor, constant: 6),
+            dots.leadingAnchor.constraint(equalTo: preview.leadingAnchor),
+            dots.trailingAnchor.constraint(equalTo: preview.trailingAnchor),
+            race.heightAnchor.constraint(equalToConstant: 56),
+            tiles.heightAnchor.constraint(equalToConstant: 76),
         ])
     }
 
@@ -155,7 +163,7 @@ final class MenuViewController: ScreenController {
             navigationController?.pushViewController(OnlineViewController(), animated: false)
             return
         }
-        guard defaults.bool(forKey: "autostart") else { return }
+        guard defaults.bool(forKey: "autostart"), let window = view.window else { return }
         let tracks = TrackLibrary.all
         var definition = tracks[min(max(defaults.integer(forKey: "track"), 0), tracks.count - 1)]
         if defaults.integer(forKey: "seed") > 0 { definition = TrackLibrary.generated(seed: UInt64(defaults.integer(forKey: "seed"))) }
@@ -165,6 +173,6 @@ final class MenuViewController: ScreenController {
         let game = GameViewController(config: config)
         game.autoDrive = defaults.bool(forKey: "autoDrive")
         game.debugDriver = defaults.string(forKey: "driver").flatMap(GameScene.DebugDriver.init(rawValue:))
-        present(game, animated: false)
+        game.start(in: window)
     }
 }

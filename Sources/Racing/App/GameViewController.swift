@@ -1,15 +1,17 @@
 import UIKit
 import SceneKit
+import GameController
 
 /// One race: builds the circuit, runs it, shows the HUD, the pause panel and the results.
-final class GameViewController: UIViewController {
+final class GameViewController: GCEventViewController {
 
     private let config: RaceConfig
     private let audio = GameAudio.shared
     private var scnView: SCNView!
     private var gameScene: GameScene!
     private var hud: HUDView!
-    private let controls = RaceControls()
+    private lazy var controls = RaceControls()
+    private var menuRoot: UIViewController?
     private var menuWasPressed = false
     private var pauseButton: UIButton!
     private var panel: PanelView?
@@ -17,6 +19,8 @@ final class GameViewController: UIViewController {
     private var hudTimer: Timer?
     private var loading: UIView?
     private var paused = false
+    private var raceIsVisible = false
+    private var raceIsForeground: Bool { raceIsVisible && UIApplication.shared.applicationState == .active }
     private var lastImpactFeedback = -TimeInterval.infinity
 
     /// Books the result (prize money, pink slips) and returns the lines for the results panel.
@@ -38,11 +42,15 @@ final class GameViewController: UIViewController {
     init(config: RaceConfig) {
         self.config = config
         super.init(nibName: nil, bundle: nil)
-        modalPresentationStyle = .fullScreen
-        modalTransitionStyle = .crossDissolve
     }
 
     required init?(coder: NSCoder) { fatalError() }
+
+    /// Give the native gamepad a visible root view throughout the race.
+    func start(in window: UIWindow) {
+        menuRoot = window.rootViewController
+        window.rootViewController = self
+    }
 
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
@@ -50,9 +58,20 @@ final class GameViewController: UIViewController {
         audio.setRacePaused(paused)
     }
 
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        raceIsVisible = true
+        updateRaceControls()
+    }
+
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        raceIsVisible = false
+        controls.setActive(false)
+    }
+
     override func viewDidDisappear(_ animated: Bool) {
         super.viewDidDisappear(animated)
-        controls.setActive(false)
         hudTimer?.invalidate()
         audio.endRace()
     }
@@ -60,6 +79,11 @@ final class GameViewController: UIViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = UI.ink
+        let center = NotificationCenter.default
+        center.addObserver(self, selector: #selector(appInactive),
+                           name: UIApplication.willResignActiveNotification, object: nil)
+        center.addObserver(self, selector: #selector(appActive),
+                           name: UIApplication.didBecomeActiveNotification, object: nil)
 
         scnView = SCNView(frame: view.bounds)
         scnView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
@@ -128,13 +152,7 @@ final class GameViewController: UIViewController {
             pauseButton.heightAnchor.constraint(equalToConstant: 40),
         ])
 
-        let center = NotificationCenter.default
-        let windowScene = view.window?.windowScene
-        center.addObserver(self, selector: #selector(appInactive),
-                           name: UIScene.willDeactivateNotification, object: windowScene)
-        center.addObserver(self, selector: #selector(appActive),
-                           name: UIScene.didActivateNotification, object: windowScene)
-        if let windowScene, windowScene.activationState != .foregroundActive { appInactive() }
+        if raceIsVisible && !raceIsForeground { appInactive() }
 
         let timer = Timer(timeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
             self?.poll()
@@ -152,14 +170,19 @@ final class GameViewController: UIViewController {
             UIView.animate(withDuration: 0.35, animations: { cover.alpha = 0 }) { _ in cover.removeFromSuperview() }
             loading = nil
         }
+        updateRaceControls()
+    }
+
+    private func updateRaceControls() {
+        controls.setActive(raceIsForeground && gameScene != nil && !paused && panel == nil
+                           && !pauseButton.isHidden && !autoDrive)
     }
 
     // MARK: - Per-frame
 
     private func poll() {
         guard let gs = gameScene else { return }
-        let foreground = view.window?.windowScene?.activationState == .foregroundActive
-        controls.setActive(foreground && !paused && panel == nil && !pauseButton.isHidden && !autoDrive)
+        let foreground = raceIsForeground
         let menuPressed = foreground && controls.menuPressed
         if menuPressed, !menuWasPressed, !pauseButton.isHidden {
             if panel == nil { pauseTapped() } else { resumeRace?() }
@@ -223,7 +246,10 @@ final class GameViewController: UIViewController {
         if online != nil {
             // The race goes on for everyone else; the car just coasts while the panel is up.
             let resume = GlowButton("RESUME", filled: true)
-            resumeRace = { [weak self] in self?.closePanel() }
+            resumeRace = { [weak self] in
+                self?.closePanel()
+                self?.updateRaceControls()
+            }
             resume.onTap = resumeRace
             let leave = GlowButton("LEAVE RACE", tint: UI.magenta)
             leave.onTap = { [weak self] in self?.leaveOnline() }
@@ -335,11 +361,9 @@ final class GameViewController: UIViewController {
     }
 
     private func leaveOnline() {
-        controls.setActive(false)
-        hudTimer?.invalidate()
-        scnView.isPlaying = false
         let leave = onLeave
-        dismiss(animated: true) { leave?() }
+        quit()
+        leave?()
     }
 
     /// Called by the lobby when the connection drops mid-race.
@@ -377,19 +401,21 @@ final class GameViewController: UIViewController {
     }
 
     private func quit() {
+        guard let window = view.window, window.rootViewController === self, let menuRoot else { return }
         controls.setActive(false)
         hudTimer?.invalidate()
         scnView.isPlaying = false
-        dismiss(animated: true)
+        self.menuRoot = nil
+        window.rootViewController = menuRoot
     }
 
     private func setPaused(_ value: Bool) {
         paused = value
         audio.setRacePaused(value)
-        if value { controls.setActive(false) }
         gameScene?.controls = CarInput(throttle: 0)
         gameScene?.setActive(!value)
         scnView?.isPlaying = !value
+        updateRaceControls()
     }
 
     @objc private func appInactive() {
@@ -401,7 +427,11 @@ final class GameViewController: UIViewController {
 
     @objc private func appActive() {
         // Stays paused behind the panel until the player resumes; results keep running.
-        if gameScene != nil, online == nil, pauseButton.isHidden { setPaused(false) }
+        if gameScene != nil, online == nil, pauseButton.isHidden {
+            setPaused(false)
+        } else {
+            updateRaceControls()
+        }
     }
 
     override var supportedInterfaceOrientations: UIInterfaceOrientationMask { .landscape }

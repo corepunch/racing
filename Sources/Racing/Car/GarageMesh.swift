@@ -1,7 +1,7 @@
 import SceneKit
 import simd
 
-/// Procedural meshes share the faceted surfaces and emissive materials of the race roster.
+/// Procedural meshes share the rounded body profiles and emissive materials of the race roster.
 enum GarageMesh {
     private typealias Shell = CarMesh.Shell
     private typealias Slot = CarMesh.Slot
@@ -158,8 +158,20 @@ enum GarageMesh {
             CarMesh.section(x: x, z: $0.z, halfWidth: $0.width, top: $0.top, bottom: $0.bottom,
                             chine: 0.43, roof: roof)
         }
-        shell.loft(slot, rings)
-        return rings
+        // Round each change in taper with a quadratic fillet. The middle of each panel
+        // stays straight for lettering, and the ends still meet their attachment points.
+        var skin = [rings[0]]
+        for i in 1..<(rings.count - 1) {
+            let corner = rings[i]
+            let before = zip(corner, rings[i - 1]).map { $0 + ($1 - $0) * 0.24 }
+            let after = zip(corner, rings[i + 1]).map { $0 + ($1 - $0) * 0.24 }
+            skin.append(before)
+            skin.append(corner.indices.map { (before[$0] + 2 * corner[$0] + after[$0]) * 0.25 })
+            skin.append(after)
+        }
+        skin.append(rings[rings.count - 1])
+        shell.loft(slot, skin)
+        return skin
     }
 
     private static func frame(_ part: CarPart, size: GarageDimensions, shell: inout Shell,
@@ -204,10 +216,10 @@ enum GarageMesh {
 
         let glassWidth = core * (part == .atlas ? 0.83 : 0.68)
         let rise: Float = part == .sprint ? 0.30 : 0.40
-        // The glass carries its reflections as a texture laid along the canopy and up its height.
+        // Glass tint grades from the sill to the crown.
         let nose = -end * 0.62, tail = end * 0.24, sill = h + 0.04, crown = h + rise + 0.015
         shell.mapping = { p, _, _ in SIMD2((p.z - nose) / (tail - nose), (p.y - sill) / (crown - sill)) }
-        panel(&shell, .glass, roof: 0.75, [
+        let canopy = panel(&shell, .glass, roof: 0.56, [
             (nose, glassWidth * 0.66, sill, h + 0.10),
             (-end * 0.27, glassWidth, h + 0.09, h + rise),
             (-end * 0.02, glassWidth * 0.94, h + 0.09, crown),
@@ -215,11 +227,18 @@ enum GarageMesh {
         ])
         shell.mapping = nil
         // A bow over the glass where the windscreen meets the roof.
-        let bow = (z: -end * 0.27, half: Float(0.028), proud: Float(0.014))
-        shell.loft(.accent, [bow.z - bow.half, bow.z + bow.half].map {
-            CarMesh.section(z: $0, halfWidth: glassWidth + bow.proud, top: h + rise + bow.proud, bottom: h + 0.09,
-                            chine: 0.43, roof: 0.75)
-        })
+        let bowZ = -end * 0.27
+        // Sample the finished canopy so the trim follows the curved windscreen precisely.
+        func bowRing(at z: Float) -> [SIMD3<Float>] {
+            let i = canopy.firstIndex { $0[0].z >= z }!
+            let a = canopy[i - 1], b = canopy[i]
+            let t = (z - a[0].z) / (b[0].z - a[0].z)
+            return zip(a, b).map { start, finish in
+                let p = start + (finish - start) * t
+                return SIMD3(p.x * 1.025, p.y + 0.009, z)
+            }
+        }
+        shell.loft(.accent, [bowRing(at: bowZ - 0.028), bowRing(at: bowZ + 0.028)])
         for side: Float in [-1, 1] {
             shell.box(.accent, centre: SIMD3(side * glassWidth, h + 0.10, -end * 0.27),
                       size: SIMD3(0.09, 0.046, end * 0.56))
@@ -369,7 +388,7 @@ enum GarageMesh {
         ])
         // The frame's name across the wing, where the chasing pack reads it.
         if let (name, ink) = name {
-            let top = CarMesh.Face.roof(blade[1], blade[2])
+            let top = CarMesh.Face.roof(blade[blade.count - 2], blade[blade.count - 1])
             shell.decal(name, color: ink, centre: top.centre, normal: top.normal, up: SIMD3(0, 0, -1),
                         height: top.length * 0.62, maxWidth: top.rise * 0.7)
         }

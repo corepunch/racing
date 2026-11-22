@@ -12,6 +12,7 @@ struct CarInput {
     /// 0 ... 1. Held at a standstill it selects reverse.
     var brake: Float = 0
     var throttle: Float = 1
+    var handbrake = false
 }
 
 /// Wheel suspension can absorb a landing before the chassis ever hits the deck.
@@ -47,8 +48,8 @@ final class Car {
     private static let suspensionTravel: Float = 0.20
     private static let chassisCenterHeight: Float = 0.5
     private static let chassisHalfHeight: Float = 0.3
-    /// About 1.1 g on its own; split front-biased so the car squats rather than tips.
-    private let brakeForce: CGFloat = 21_000
+    /// Full pedal deceleration on level ground, in m/s².
+    private let brakeDeceleration: CGFloat = 11
     /// Aerodynamic grip in N per (m/s)², pressing the car into the road.
     private let downforce: Float = 3.2
     static let boostTime: Float = 2.2
@@ -99,6 +100,8 @@ final class Car {
 
     private var sampleIndex = 0
     private var reversing = false
+    private var rearSlip: Float = 0
+    private(set) var lockedWheelSkid: Float = 0
     private var smoothSteer: Float = 0
     private var exhaust: Float = 0
     private var stuckTime: Float = 0
@@ -297,6 +300,9 @@ final class Car {
         let frame = track.frame(at: distance)
         speed = 0; heading = 0; lateralSpeed = 0
         reversing = false; scraping = false; smoothSteer = 0; yawRate = 0
+        rearSlip = 0
+        lockedWheelSkid = 0
+        for wheel in vehicle?.wheels.dropFirst(2) ?? [] { wheel.frictionSlip = CGFloat(design.spec.grip) }
         wallImpactSeverity = 0
         landing = LandingDetector()
         landingSpeed = 0
@@ -373,7 +379,7 @@ final class Car {
     /// `hold` keeps the car on its brakes (the grid). `wallGuard` (0...1) is the pilot
     /// assist: see `guardSteer`.
     func step(dt: Float, input: CarInput, track: TrackPath, hold: Bool = false, wallGuard: Float = 0) {
-        guard let vehicle = vehicle, let body = node.physicsBody else { return }
+        guard let vehicle, let world, let body = node.physicsBody else { return }
         let previousLateralSpeed = lateralSpeed
         let frame = sense(track: track, body: body)
         boost = max(0, boost - dt)
@@ -404,24 +410,36 @@ final class Car {
         let boosting = boost > 0
         let top = spec.topSpeed * pace * (boosting ? 1.22 : 1)
 
-        // Braking is progressive: a light brake just slows the car, a hard one (the full pull)
-        // bites twice as hard and, held at a standstill, selects reverse. Releasing it brakes
-        // the reverse motion before forward drive resumes.
-        let hard = input.brake > 0.9
-        if hard && !reversing && speed < 0.5 { reversing = true }
-        if !hard && reversing && speed < 0.5 { reversing = false }
+        let handbrake = input.handbrake && !hold
+        let wantsReverse = input.brake > 0.9 && !hold && !handbrake
+        if speed < 0.5 { reversing = wantsReverse }
         // Thrust fades towards top speed; reverse is deliberately weak.
         let fade = CGFloat(max(0, 1 - pow(speed / top, 2)))
         var drive: CGFloat
         var braking: CGFloat
-        if reversing {
-            drive = hard ? CGFloat(input.brake) * 0.25 : 0
-            braking = hard ? 0 : 1
+        if hold {
+            drive = 0
+            braking = 1
+        } else if reversing && !handbrake {
+            drive = wantsReverse ? CGFloat(input.brake) * 0.25 : 0
+            braking = wantsReverse ? 0 : 1
         } else {
-            drive = hard ? 0 : -CGFloat(input.throttle) * fade * (boosting ? 1.9 : 1)
-            braking = hard ? 2 : CGFloat(input.brake)
+            drive = input.brake > 0 || handbrake ? 0 : -CGFloat(input.throttle) * fade * (boosting ? 1.9 : 1)
+            braking = CGFloat(input.brake)
         }
-        if hold { drive = 0; braking = 1 }
+
+        // The rear tyres break loose under the lever and take a moment to regain grip.
+        let slipTarget = handbrake ? smoothstep(1, 6, speed) : 0
+        let previousSlip = rearSlip
+        rearSlip += min(8 * dt, max(-2.5 * dt, slipTarget - rearSlip))
+        if rearSlip != previousSlip {
+            // Longer wheelbases resist rotation and need less rear grip to start a slide.
+            let lockedGrip = mix(0.40, 0.275, smoothstep(1, 1.8, design.axle))
+            let grip = CGFloat(mix(spec.grip, lockedGrip, rearSlip))
+            for wheel in vehicle.wheels.dropFirst(2) { wheel.frictionSlip = grip }
+        }
+        lockedWheelSkid = handbrake && height < CarMesh.axleHeight + 0.35 && upright > 0.5
+            ? rearSlip * smoothstep(1, 14, speed) : 0
 
         // Steering lock shrinks with speed so the car stays controllable flat out.
         var steer = max(-1, min(1, input.steer))
@@ -477,17 +495,21 @@ final class Car {
         }
 
         let engineForce = Self.mass * CGFloat(spec.thrust)
+        // The vehicle solver caps each wheel's braking impulse per physics tick.
+        let brakeImpulse = Self.mass * brakeDeceleration * CGFloat(world.timeStep)
         for index in 0..<4 {
             let front = index < 2
+            let serviceBrake = braking * (front ? 0.3 : 0.2)
+            let rearBrake: CGFloat = handbrake && !front ? 0.35 : 0
             vehicle.setSteeringAngle(front ? steering : 0, forWheelAt: index)
             vehicle.applyEngineForce(engineForce * drive / 4, forWheelAt: index)
-            vehicle.applyBrakingForce(brakeForce * braking * (front ? 0.3 : 0.2), forWheelAt: index)
+            vehicle.applyBrakingForce(brakeImpulse * max(serviceBrake, rearBrake), forWheelAt: index)
         }
         // Exhaust grows with speed, not with the throttle, so it swells and dies away gradually.
         let exhaustTarget = min(1, speed / spec.topSpeed) + (boosting ? 0.6 : 0)
         exhaust += (exhaustTarget - exhaust) * min(1, 2.5 * dt)
         CarMesh.setThrust(exhaust, on: node)
-        CarMesh.setBrake(Float(braking), on: node)
+        CarMesh.setBrake(handbrake ? 1 : Float(braking), on: node)
     }
 
     /// Chassis stability, part of how the car handles rather than an assist: damps pitch
@@ -509,13 +531,13 @@ final class Car {
         let excess = abs(yawRate) - expected - 0.15
         if excess > 0 {
             let axis = up * (yawRate > 0 ? -1 : 1)
-            body.applyTorque(SCNVector4(axis.x, axis.y, axis.z, excess * 7_000), asImpulse: false)
+            body.applyTorque(SCNVector4(axis.x, axis.y, axis.z, excess * 7_000 * (1 - 0.8 * rearSlip)), asImpulse: false)
         }
         guard speed > 3 else { return }
         let right = SIMD3<Float>(transform.columns.0.x, transform.columns.0.y, transform.columns.0.z)
         let v = body.velocity
         let sideways = simd_dot(SIMD3<Float>(Float(v.x), Float(v.y), Float(v.z)), right)
-        let grip = -right * sideways * Float(Self.mass) * 1.6
+        let grip = -right * sideways * Float(Self.mass) * (1.6 - 1.4 * rearSlip)
         body.applyForce(SCNVector3(grip.x, grip.y, grip.z), asImpulse: false)
     }
 
@@ -586,11 +608,12 @@ final class Car {
     /// against something or ended up pointing the wrong way. Returns true if it did.
     private func recoverIfNeeded(dt: Float, input: CarInput, frame: PathSample, track: TrackPath) -> Bool {
         flippedTime = upright < 0.3 ? flippedTime + dt : 0
-        stuckTime = speed < 1.5 && input.brake < 0.05 && input.throttle > 0.5 ? stuckTime + dt : 0
+        let tryingToDrive = input.throttle > 0.5 && input.brake < 0.05 && !input.handbrake
+        stuckTime = speed < 1.5 && tryingToDrive ? stuckTime + dt : 0
         wrongWayTime = abs(heading) > 2 ? wrongWayTime + dt : 0
         // Trying to drive but getting nowhere: nose against a barrier, creeping along it.
         var stalled = false
-        if input.throttle > 0.5, input.brake < 0.05 {
+        if tryingToDrive {
             stallTime += dt
             if stallTime > 2.5 {
                 stalled = progress - stallMark < 12

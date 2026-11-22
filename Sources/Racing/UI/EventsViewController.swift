@@ -27,6 +27,7 @@ enum TrackMaps {
 /// Starts races and books what happens in them.
 enum RaceLauncher {
     static func circuit(_ event: CircuitEvent, from vc: UIViewController) {
+        guard let window = vc.viewIfLoaded?.window else { return }
         let profile = Profile.shared
         guard profile.spend(event.entry) else {
             Toast.show("NOT ENOUGH CREDITS", in: vc.view, color: UI.magenta)
@@ -52,10 +53,11 @@ enum RaceLauncher {
         }
         game.retryTitle = event.entry > 0 ? "RACE AGAIN · \(Economy.credits(event.entry))" : "RACE AGAIN"
         game.onRetry = { profile.spend(event.entry) }
-        vc.present(game, animated: true)
+        game.start(in: window)
     }
 
     static func street(_ challenger: Challenger, stake: Profile.Stake, from vc: UIViewController) {
+        guard let window = vc.viewIfLoaded?.window else { return }
         let profile = Profile.shared
         let car = profile.selectedCar
         var config = RaceConfig(definition: TrackMaps.definition(challenger.track), player: car.design,
@@ -83,7 +85,7 @@ enum RaceLauncher {
             lines.append(ResultLine(title: "BALANCE", value: Economy.credits(profile.credits), color: .white))
             return lines
         }
-        vc.present(game, animated: true)
+        game.start(in: window)
     }
 }
 
