@@ -195,8 +195,16 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
         self.config = config
         track = TrackPath(definition: config.definition)
         super.init()
+        // The scene is built off the main thread (see GameViewController). SceneKit only
+        // applies background-thread changes reliably inside an explicit transaction; without
+        // one, a physics body could miss the world it was added to, and a car once dropped
+        // straight through a track that had no collision.
+        SCNTransaction.begin()
+        SCNTransaction.disableActions = true
         buildScene()
         restart()
+        SCNTransaction.commit()
+        SCNTransaction.flush()
     }
 
     /// Used by the track recorder.
