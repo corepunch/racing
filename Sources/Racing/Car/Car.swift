@@ -210,15 +210,24 @@ final class Car {
 
     // MARK: - Online
 
-    /// A car someone else drives: off the simulation but still solid (kinematic), so the
-    /// local car bumps into it. Posed from the network every frame; hidden until the first pose.
+    /// A car someone else drives: off the simulation, posed from the network every frame.
+    /// Until the first pose arrives it is hidden and not solid: it would otherwise sit
+    /// invisibly on its grid slot, and a local car driving into it is pushed down through
+    /// the deck, respawned on the same spot and pushed through again.
     func setRemote() {
         setDemo(true)
         node.isHidden = true
+        node.physicsBody?.categoryBitMask = 0
+        node.physicsBody?.collisionBitMask = 0
     }
 
     func applyRemote(_ state: NetCarState, track: TrackPath, dt: Float) {
-        node.isHidden = false
+        if node.isHidden {
+            // First pose: solid from now on, so the local car bumps into it.
+            node.isHidden = false
+            node.physicsBody?.categoryBitMask = PhysicsCategory.car
+            node.physicsBody?.collisionBitMask = PhysicsCategory.track | PhysicsCategory.car
+        }
         worldPosition = state.position
         node.simdPosition = state.position
         node.simdOrientation = state.orientation
