@@ -14,6 +14,22 @@ struct CarInput {
     var throttle: Float = 1
 }
 
+/// Wheel suspension can absorb a landing before the chassis ever hits the deck.
+private struct LandingDetector {
+    private var airborne = false
+    private var previousDescent: Float = 0
+
+    mutating func update(height: Float, normalSpeed: Float) -> Float {
+        let descent = max(0, -normalSpeed)
+        defer { previousDescent = descent }
+        if height > CarMesh.axleHeight + 0.5 { airborne = true }
+        guard airborne, height <= CarMesh.axleHeight + 0.12 else { return 0 }
+        airborne = false
+        let impact = max(previousDescent, descent)
+        return impact >= 4 ? impact : 0
+    }
+}
+
 /// One racer, player or rival: a SceneKit physics vehicle (rigid chassis, four sprung,
 /// driven wheels) built from a `CarDesign`. Power, grip and downforce are tuned for
 /// speed, not realism. Alongside the physics it keeps track of where the car is in the
@@ -28,6 +44,9 @@ final class Car {
     private var isDemo = false
 
     static let mass: CGFloat = 1_900
+    private static let suspensionTravel: Float = 0.20
+    private static let chassisCenterHeight: Float = 0.5
+    private static let chassisHalfHeight: Float = 0.3
     /// About 1.1 g on its own; split front-biased so the car squats rather than tips.
     private let brakeForce: CGFloat = 21_000
     /// Aerodynamic grip in N per (m/s)², pressing the car into the road.
@@ -61,6 +80,7 @@ final class Car {
     private(set) var scraping = false
     /// Strongest barrier hit (m/s into the wall) since last read.
     var pendingHit: Float = 0
+    private(set) var landingSpeed: Float = 0
     var pendingBoost = false
 
     // --- Race bookkeeping (owned by GameScene) ---
@@ -87,6 +107,7 @@ final class Car {
     private var stallTime: Float = 0
     private var stallMark: Float = 0
     private var wallImpactSeverity: Float = 0
+    private var landing = LandingDetector()
 
     private var collisionHalfWidth: Float { design.halfWidth + 0.15 }
 
@@ -155,12 +176,12 @@ final class Car {
         self.world = world
         // A box over the whole car, a little wider than the tyres so they stay off the barriers,
         // and clear of the road so only the wheels touch it.
-        let box = SCNBox(width: CGFloat(collisionHalfWidth * 2), height: 0.6,
+        let box = SCNBox(width: CGFloat(collisionHalfWidth * 2), height: CGFloat(2 * Self.chassisHalfHeight),
                          length: CGFloat(design.frontCollisionExtent + design.rearCollisionExtent),
                          chamferRadius: 0.12)
         let midpoint = (design.rearCollisionExtent - design.frontCollisionExtent) / 2
         let shape = SCNPhysicsShape(shapes: [SCNPhysicsShape(geometry: box, options: nil)],
-                                    transforms: [NSValue(scnMatrix4: SCNMatrix4MakeTranslation(0, 0.5, midpoint))])
+                                    transforms: [NSValue(scnMatrix4: SCNMatrix4MakeTranslation(0, Self.chassisCenterHeight, midpoint))])
         let body = SCNPhysicsBody(type: .dynamic, shape: shape)
         body.mass = Self.mass
         body.centerOfMassOffset = SCNVector3(0, -0.35, 0)
@@ -181,7 +202,7 @@ final class Car {
             wheel.steeringAxis = SCNVector3(0, -1, 0)
             wheel.radius = CGFloat(radius)
             wheel.suspensionRestLength = 0.28
-            wheel.maximumSuspensionTravel = 20 // centimetres
+            wheel.maximumSuspensionTravel = CGFloat(Self.suspensionTravel * 100) // centimetres
             wheel.suspensionStiffness = 55
             wheel.suspensionCompression = 6.5
             wheel.suspensionDamping = 8
@@ -228,15 +249,18 @@ final class Car {
             node.physicsBody?.categoryBitMask = PhysicsCategory.car
             node.physicsBody?.collisionBitMask = PhysicsCategory.track | PhysicsCategory.car
         }
+        progress = state.progress
+        s = Self.wrap(state.progress, track.totalLength)
         worldPosition = state.position
-        node.simdPosition = state.position
+        if let floor = groundCorrection(at: worldPosition, orientation: state.orientation, track: track) {
+            worldPosition.y += floor.lift
+        }
+        node.simdPosition = worldPosition
         node.simdOrientation = state.orientation
         speed = simd_length(state.velocity)
         let forward = state.orientation.act(SIMD3<Float>(0, 0, -1))
         worldForward = speed > 6 ? state.velocity / speed : forward
         yaw = atan2(forward.x, -forward.z)
-        progress = state.progress
-        s = Self.wrap(state.progress, track.totalLength)
         boost = state.boosting ? Self.boostTime : 0
         // No physics turns the wheels, so roll them by hand.
         let roll = simd_dot(state.velocity, forward) * dt
@@ -260,7 +284,7 @@ final class Car {
     func place(progress: Float, lateral: Float, on track: TrackPath) {
         self.progress = progress
         boost = 0
-        pendingHit = 0; pendingBoost = false
+        pendingBoost = false
         finishTime = nil; lapStart = 0; bestLap = nil; lastLap = nil; avoid = 0
         teleport(to: Self.wrap(progress, track.totalLength), lateral: lateral, track: track)
     }
@@ -274,6 +298,9 @@ final class Car {
         speed = 0; heading = 0; lateralSpeed = 0
         reversing = false; scraping = false; smoothSteer = 0; yawRate = 0
         wallImpactSeverity = 0
+        landing = LandingDetector()
+        landingSpeed = 0
+        pendingHit = 0
         stuckTime = 0; flippedTime = 0; wrongWayTime = 0; stallTime = 0; stallMark = progress
         setPose(frame, lateral: lateral, lift: 0.6)
         node.physicsBody?.velocity = SCNVector3Zero
@@ -310,6 +337,38 @@ final class Car {
 
     // MARK: - Per frame
 
+    private func groundCorrection(at position: SIMD3<Float>, orientation: simd_quatf,
+                                  track: TrackPath) -> (lift: Float, normal: SIMD3<Float>)? {
+        guard let ground = track.ground(at: position, near: s) else { return nil }
+        // Allow full spring compression. If the car tips, also support the lowest
+        // corner of its oriented chassis so the nose, flank or roof cannot sink in.
+        let up = orientation.inverse.act(ground.normal)
+        let boxClearance = abs(up.x) * collisionHalfWidth
+            + max(up.z * design.frontCollisionExtent, -up.z * design.rearCollisionExtent)
+            + abs(up.y) * Self.chassisHalfHeight - up.y * Self.chassisCenterHeight
+        let minimum = max(CarMesh.axleHeight - Self.suspensionTravel, boxClearance)
+        guard ground.clearance < minimum else { return nil }
+        return ((minimum - ground.clearance) / ground.normal.y, ground.normal)
+    }
+
+    /// Enforce the road surface after SceneKit advances the wheels and chassis, before rendering.
+    func enforceGround(on track: TrackPath) {
+        guard let body = node.physicsBody, body.type == .dynamic else { return }
+        let pose = node.presentation
+        guard let floor = groundCorrection(at: pose.simdWorldPosition, orientation: pose.simdWorldOrientation,
+                                           track: track) else { return }
+        var transform = pose.simdWorldTransform
+        transform.columns.3.y += floor.lift
+        let v = body.velocity
+        let velocity = SIMD3(v.x, v.y, v.z)
+        let sliding = velocity - floor.normal * min(0, simd_dot(velocity, floor.normal))
+        let spin = body.angularVelocity
+        node.simdWorldTransform = transform
+        body.resetTransform()
+        body.velocity = SCNVector3(sliding.x, sliding.y, sliding.z)
+        body.angularVelocity = spin
+    }
+
     /// Reads the simulated pose, then sets wheel forces for the next physics step.
     /// `hold` keeps the car on its brakes (the grid). `wallGuard` (0...1) is the pilot
     /// assist: see `guardSteer`.
@@ -324,11 +383,22 @@ final class Car {
         let wallGap = wallLimit(frame, side: wallSide) - abs(d)
         let impactSpeed = max(previousLateralSpeed * wallSide, lateralSpeed * wallSide)
         let glancing = abs(sin(heading)) < 0.22 && impactSpeed < 8 && wallImpactSeverity < 0.15
-        let touching = wallGap <= (glancing ? 0.26 : 0)
-        if touching, !scraping, impactSpeed > 2 { pendingHit = max(pendingHit, impactSpeed) }
+        // A small release margin keeps contact stable across joins in the barrier mesh.
+        let contactGap: Float = glancing ? 0.26 : 0.08
+        let touching = wallGap <= contactGap + (scraping ? 0.10 : 0)
+        if !hold, touching, !scraping, impactSpeed > 2 { pendingHit = max(pendingHit, impactSpeed) }
         scraping = touching
 
         if !hold, recoverIfNeeded(dt: dt, input: input, frame: frame, track: track) { return }
+
+        let height = simd_dot(worldPosition - frame.position, frame.up)
+        let v = body.velocity
+        if !hold, abs(d) < frame.halfWidth + TrackMeshBuilder.barrierOffset {
+            landingSpeed = landing.update(height: height, normalSpeed: simd_dot(SIMD3(v.x, v.y, v.z), frame.up))
+        } else {
+            landing = LandingDetector()
+            landingSpeed = 0
+        }
 
         let spec = design.spec
         let boosting = boost > 0
@@ -382,7 +452,6 @@ final class Car {
                 let axis = up * wallSide
                 body.applyTorque(SCNVector4(axis.x, axis.y, axis.z, into * 60_000), asImpulse: false)
             }
-            let v = body.velocity
             let originalVelocity = SIMD3(Float(v.x), Float(v.y), Float(v.z))
             var velocity = originalVelocity
             if glancing {
@@ -392,16 +461,16 @@ final class Car {
                 velocity -= frame.right * (max(0, outward - outwardLimit) * wallSide)
             }
             // Keep the small suspension bounce, but stop a wheel riding up the wall.
-            let height = simd_dot(worldPosition - frame.position, frame.up)
             let lift = simd_dot(velocity, frame.up)
             let liftLimit = max(0, (0.9 - height) * 6)
             if lift > liftLimit {
                 velocity -= frame.up * (lift - liftLimit)
             }
             if velocity != originalVelocity { body.velocity = SCNVector3(velocity.x, velocity.y, velocity.z) }
-            // Braking along the wall depends on the speed into it. After a hit, it eases back to a light scrape.
+            // Even a parallel scrape must overcome full throttle at racing speed.
+            // Armour softens the drag, and its speed dependence lets a slow car pull away.
             wallImpactSeverity = max(wallImpactSeverity, smoothstep(3.5, 19, impactSpeed))
-            let drag = Float(Self.mass) * mix(0.065, 0.4, wallImpactSeverity) * (1 - 0.5 * spec.armor)
+            let drag = Float(Self.mass) * mix(0.8, 1.4, wallImpactSeverity) * (1 - 0.2 * spec.armor)
             let alongWall = simd_dot(velocity, frame.forward)
             let friction = -frame.forward * (alongWall * drag)
             body.applyForce(SCNVector3(friction.x, friction.y, friction.z), asImpulse: false)

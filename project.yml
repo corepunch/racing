@@ -6,8 +6,8 @@ options:
   defaultConfig: Debug
 
 settings:
-  SUPPORTED_INTERFACE_ORIENTATIONS: UIInterfaceOrientationPortrait
-  SUPPORTED_INTERFACE_ORIENTATIONS_IPAD: UIInterfaceOrientationPortrait
+  SUPPORTED_INTERFACE_ORIENTATIONS: "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
+  SUPPORTED_INTERFACE_ORIENTATIONS_IPAD: "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
 
 targets:
   Racing:
@@ -18,6 +18,8 @@ targets:
         excludes:
           - "**/.DS_Store"
       - path: Resources/Assets.xcassets
+      - path: Resources/PrivacyInfo.xcprivacy
+        buildPhase: resources
     preBuildScripts:
       - name: Copy Resources
         basedOnDependencyAnalysis: false
@@ -34,7 +36,7 @@ targets:
           - "$(BUILT_PRODUCTS_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Audio"
     settings:
       INFOPLIST_FILE: Resources/Info.plist
-      PRODUCT_BUNDLE_IDENTIFIER: com.racing.app
+      PRODUCT_BUNDLE_IDENTIFIER: com.corepunch.arcline
       PRODUCT_BUNDLE_IDENTIFIER[sdk=macosx*]: com.racing.app.desktop
       TARGETED_DEVICE_FAMILY: "1,2"
       SUPPORTS_MACCATALYST: "YES"

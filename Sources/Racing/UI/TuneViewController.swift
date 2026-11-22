@@ -15,8 +15,7 @@ final class TuneViewController: ScreenController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        addHeader("GARAGE")
-        buildLayout()
+        buildLayout(below: addHeader("GARAGE"))
         NotificationCenter.default.addObserver(self, selector: #selector(changed), name: Profile.didChange, object: nil)
     }
 
@@ -31,12 +30,7 @@ final class TuneViewController: ScreenController {
         showroom.isPlaying = false
     }
 
-    private func buildLayout() {
-        let scroll = UIScrollView()
-        scroll.translatesAutoresizingMaskIntoConstraints = false
-        scroll.showsVerticalScrollIndicator = false
-        scroll.alwaysBounceVertical = true
-
+    private func buildLayout(below header: UIView) {
         badge.setContentHuggingPriority(.required, for: .horizontal)
         let head = UI.stack([badge, carName], axis: .horizontal, spacing: 10, alignment: .center)
         rows = UpgradeKind.allCases.map { kind in
@@ -51,33 +45,19 @@ final class TuneViewController: ScreenController {
         actions.distribution = .fillEqually
         actions.heightAnchor.constraint(equalToConstant: 48).isActive = true
         let upgradesTitle = UI.caps("PERFORMANCE", 10)
-        let content = UI.stack([head, stats, upgradesTitle] + rows + [actions], spacing: 10)
-        content.setCustomSpacing(14, after: head)
-        content.setCustomSpacing(22, after: stats)
-        content.setCustomSpacing(16, after: rows.last!)
-        scroll.addSubview(content)
+        let preview = UI.stack([showroom, head, stats], spacing: 8)
+        showroom.heightAnchor.constraint(greaterThanOrEqualToConstant: 78).isActive = true
+        carName.adjustsFontSizeToFitWidth = true
+        carName.minimumScaleFactor = 0.65
+        let upgrades = UI.scrollColumn(UI.stack([upgradesTitle] + rows, spacing: 8))
+        let controls = UI.stack([upgrades, actions], spacing: 8)
 
         showroom.onIndexChange = { [weak self] i in self?.show(i) }
         showroom.onSettle = { [weak self] i in
             guard let self, self.shown.indices.contains(i) else { return }
             self.profile.select(self.shown[i].id)
         }
-        [showroom, scroll].forEach(view.addSubview)
-        let safe = view.safeAreaLayoutGuide
-        NSLayoutConstraint.activate([
-            showroom.topAnchor.constraint(equalTo: safe.topAnchor, constant: 50),
-            showroom.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            showroom.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            showroom.heightAnchor.constraint(equalTo: view.heightAnchor, multiplier: 0.27),
-            scroll.topAnchor.constraint(equalTo: showroom.bottomAnchor),
-            scroll.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            scroll.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            scroll.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-            content.topAnchor.constraint(equalTo: scroll.contentLayoutGuide.topAnchor, constant: 6),
-            content.bottomAnchor.constraint(equalTo: scroll.contentLayoutGuide.bottomAnchor, constant: -40),
-            content.leadingAnchor.constraint(equalTo: scroll.frameLayoutGuide.leadingAnchor, constant: UI.gutter),
-            content.trailingAnchor.constraint(equalTo: scroll.frameLayoutGuide.trailingAnchor, constant: -UI.gutter),
-        ])
+        placeBody(UI.columns(preview, controls), below: header)
     }
 
     @objc private func changed() {
@@ -227,7 +207,7 @@ final class DealerViewController: ScreenController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        addHeader("DEALER")
+        let header = addHeader("DEALER")
         badge.setContentHuggingPriority(.required, for: .horizontal)
         let head = UI.stack([badge, carName], axis: .horizontal, spacing: 10, alignment: .center)
         let info = UI.stack([carLine, head, stats, buy], spacing: 8)
@@ -236,20 +216,10 @@ final class DealerViewController: ScreenController {
         buy.heightAnchor.constraint(equalToConstant: 60).isActive = true
         buy.onTap = { [weak self] in self?.confirmBuy() }
         showroom.onIndexChange = { [weak self] i in self?.show(i) }
-        [showroom, dots, info].forEach(view.addSubview)
-        let safe = view.safeAreaLayoutGuide
-        NSLayoutConstraint.activate([
-            showroom.topAnchor.constraint(equalTo: safe.topAnchor, constant: 50),
-            showroom.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            showroom.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            showroom.bottomAnchor.constraint(equalTo: dots.topAnchor, constant: -8),
-            dots.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            dots.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            dots.bottomAnchor.constraint(equalTo: info.topAnchor, constant: -20),
-            info.leadingAnchor.constraint(equalTo: safe.leadingAnchor, constant: UI.gutter),
-            info.trailingAnchor.constraint(equalTo: safe.trailingAnchor, constant: -UI.gutter),
-            info.bottomAnchor.constraint(equalTo: safe.bottomAnchor, constant: -12),
-        ])
+        let preview = UI.stack([showroom, dots], spacing: 8)
+        carName.adjustsFontSizeToFitWidth = true
+        carName.minimumScaleFactor = 0.65
+        placeBody(UI.columns(preview, UI.scrollColumn(info, centered: true)), below: header)
         showroom.setCars(catalog.map(\.design), selected: 0)
         NotificationCenter.default.addObserver(self, selector: #selector(changed), name: Profile.didChange, object: nil)
     }
@@ -304,16 +274,14 @@ final class DealerViewController: ScreenController {
     }
 }
 
-/// Driver name, assists, haptics, and starting over.
+/// Driver name, assists, sound, haptics, and starting over.
 final class SettingsViewController: ScreenController, UITextFieldDelegate {
     private let profile = Profile.shared
     private let nameField = UITextField()
 
     override init(nibName: String?, bundle: Bundle?) {
         super.init(nibName: nil, bundle: nil)
-        modalPresentationStyle = .pageSheet
-        sheetPresentationController?.detents = [.large()]
-        sheetPresentationController?.prefersGrabberVisible = true
+        modalPresentationStyle = .fullScreen
     }
 
     required init?(coder: NSCoder) { fatalError() }
@@ -325,7 +293,16 @@ final class SettingsViewController: ScreenController, UITextFieldDelegate {
         let close = CircleButton(symbol: "xmark", size: 36)
         close.accessibilityLabel = "Close"
         close.onTap = { [weak self] in self?.dismiss(animated: true) }
-        let header = UI.stack([title, close], axis: .horizontal, alignment: .center)
+        var privacyStyle = UIButton.Configuration.plain()
+        privacyStyle.title = "Privacy Policy"
+        privacyStyle.baseForegroundColor = UI.cyan
+        let privacy = UIButton(configuration: privacyStyle, primaryAction: UIAction { _ in
+            guard let url = URL(string: "https://corepunch.github.io/racing/privacy.html") else { return }
+            UIApplication.shared.open(url)
+        })
+        privacy.heightAnchor.constraint(greaterThanOrEqualToConstant: 44).isActive = true
+        privacy.setContentCompressionResistancePriority(.required, for: .horizontal)
+        let header = UI.stack([title, privacy, close], axis: .horizontal, alignment: .center)
 
         nameField.text = profile.driver
         nameField.font = UI.font(17, .black)
@@ -344,6 +321,8 @@ final class SettingsViewController: ScreenController, UITextFieldDelegate {
         let haptics = toggleRow("HAPTICS", "Taps for the countdown, hits and menus.", on: profile.haptics) { [weak self] in
             self?.profile.haptics = $0
         }
+        let audio = GameAudio.shared
+        let sound = toggleRow("SOUND", "Music and race sound effects.", on: audio.isEnabled) { audio.isEnabled = $0 }
 
         let record = CardView()
         let lines = [("RACES", "\(profile.races)"), ("WINS", "\(profile.wins)"), ("EARNINGS", Economy.credits(profile.earnings)),
@@ -361,16 +340,19 @@ final class SettingsViewController: ScreenController, UITextFieldDelegate {
         let footer = UI.caps("ARCLINE \(version)", 9)
         footer.textAlignment = .center
 
-        let stack = UI.stack([header, nameCard, assist, haptics, record, reset, footer], spacing: 12)
-        stack.setCustomSpacing(20, after: header)
-        stack.setCustomSpacing(24, after: record)
-        view.addSubview(stack)
+        let driver = UI.scrollColumn(UI.stack([nameCard, record, reset, footer], spacing: 10))
+        let preferences = UI.scrollColumn(UI.stack([assist, sound, haptics], spacing: 10))
+        let columns = UI.columns(driver, preferences)
+        view.addSubview(header)
         let safe = view.safeAreaLayoutGuide
         NSLayoutConstraint.activate([
-            stack.topAnchor.constraint(equalTo: safe.topAnchor, constant: 20),
-            stack.leadingAnchor.constraint(equalTo: safe.leadingAnchor, constant: UI.gutter),
-            stack.trailingAnchor.constraint(equalTo: safe.trailingAnchor, constant: -UI.gutter),
+            header.topAnchor.constraint(equalTo: safe.topAnchor),
+            header.leadingAnchor.constraint(equalTo: safe.leadingAnchor, constant: UI.gutter),
+            header.trailingAnchor.constraint(equalTo: safe.trailingAnchor, constant: -UI.gutter),
+            header.heightAnchor.constraint(equalToConstant: 56),
         ])
+        placeBody(columns, below: header)
+
     }
 
     private func toggleRow(_ title: String, _ detail: String, on: Bool, change: @escaping (Bool) -> Void) -> UIView {
@@ -379,7 +361,9 @@ final class SettingsViewController: ScreenController, UITextFieldDelegate {
         toggle.isOn = on
         toggle.onTintColor = UI.cyan
         toggle.accessibilityLabel = title.capitalized
-        toggle.addAction(UIAction { _ in change(toggle.isOn) }, for: .valueChanged)
+        toggle.addAction(UIAction { [weak toggle] _ in
+            if let toggle { change(toggle.isOn) }
+        }, for: .valueChanged)
         let text = UI.stack([UI.label(title, UI.font(13, .black)), UI.body(detail, 12, UI.faint)], spacing: 4)
         card.fill(with: UI.stack([text, toggle], axis: .horizontal, spacing: 12, alignment: .center), inset: 14)
         return card

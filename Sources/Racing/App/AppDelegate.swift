@@ -1,19 +1,28 @@
 import UIKit
 
 @main
-final class AppDelegate: UIResponder, UIApplicationDelegate {
-    var window: UIWindow?
+final class AppDelegate: UIResponder, UIApplicationDelegate {}
 
-    func application(
-        _ application: UIApplication,
-        didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
-    ) -> Bool {
-        window = UIWindow(frame: UIScreen.main.bounds)
-        window?.rootViewController = TrackVideoRecorder.runFromLaunchArguments()
-            ? UIViewController() : MenuNavigationController(rootViewController: MenuViewController())
-        window?.makeKeyAndVisible()
-        return true
+final class AppSceneDelegate: UIResponder, UIWindowSceneDelegate {
+    var window: UIWindow?
+    private var audio: GameAudio?
+
+    func scene(_ scene: UIScene, willConnectTo session: UISceneSession,
+               options connectionOptions: UIScene.ConnectionOptions) {
+        guard let windowScene = scene as? UIWindowScene else { return }
+        let window = UIWindow(windowScene: windowScene)
+        if TrackVideoRecorder.runFromLaunchArguments() {
+            window.rootViewController = UIViewController()
+        } else {
+            audio = .shared
+            window.rootViewController = MenuNavigationController(rootViewController: MenuViewController())
+        }
+        self.window = window
+        window.makeKeyAndVisible()
     }
+
+    func sceneDidBecomeActive(_ scene: UIScene) { audio?.setSceneActive(true) }
+    func sceneWillResignActive(_ scene: UIScene) { audio?.setSceneActive(false) }
 }
 
 /// Menus push and pop with the system slide; the bar is hidden because every screen draws
@@ -28,7 +37,7 @@ final class MenuNavigationController: UINavigationController, UIGestureRecognize
 
     func gestureRecognizerShouldBegin(_ g: UIGestureRecognizer) -> Bool { viewControllers.count > 1 }
 
-    override var supportedInterfaceOrientations: UIInterfaceOrientationMask { .portrait }
+    override var supportedInterfaceOrientations: UIInterfaceOrientationMask { .landscape }
     override var prefersStatusBarHidden: Bool { true }
     override var prefersHomeIndicatorAutoHidden: Bool { true }
     override var childForStatusBarHidden: UIViewController? { topViewController }

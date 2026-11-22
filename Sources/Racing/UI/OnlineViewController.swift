@@ -11,7 +11,7 @@ final class OnlineViewController: ScreenController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        addHeader("ONLINE")
+        let header = addHeader("ONLINE")
 
         let car = profile.selectedCar.design
         let carCard = CardView()
@@ -30,16 +30,9 @@ final class OnlineViewController: ScreenController {
         spinner.startAnimating()
         let nearbyHead = UI.stack([UI.caps("RACES NEARBY", 10), spinner, UIView()], axis: .horizontal, spacing: 8, alignment: .center)
 
-        let content = UI.stack([carCard, host, hostNote, nearbyHead, list, status], spacing: 12)
-        content.setCustomSpacing(8, after: host)
-        content.setCustomSpacing(28, after: hostNote)
-        view.addSubview(content)
-        let safe = view.safeAreaLayoutGuide
-        NSLayoutConstraint.activate([
-            content.topAnchor.constraint(equalTo: safe.topAnchor, constant: 66),
-            content.leadingAnchor.constraint(equalTo: safe.leadingAnchor, constant: UI.gutter),
-            content.trailingAnchor.constraint(equalTo: safe.trailingAnchor, constant: -UI.gutter),
-        ])
+        let hosting = UI.scrollColumn(UI.stack([carCard, host, hostNote], spacing: 10))
+        let nearby = UI.stack([nearbyHead, UI.scrollColumn(UI.stack([list, status], spacing: 8))], spacing: 8)
+        placeBody(UI.columns(hosting, nearby, leadingShare: 0.42), below: header)
         browser.onChange = { [weak self] in self?.reload() }
         reload()
     }
@@ -148,37 +141,18 @@ final class LobbyViewController: ScreenController {
         header = addHeader("LOBBY")
         header.onBack = { [weak self] in self?.confirmLeave() }
 
-        let scroll = UIScrollView()
-        scroll.translatesAutoresizingMaskIntoConstraints = false
-        scroll.alwaysBounceVertical = true
-        scroll.showsVerticalScrollIndicator = false
         addBot.widthAnchor.constraint(equalToConstant: 92).isActive = true
         addBot.heightAnchor.constraint(equalToConstant: 34).isActive = true
         addBot.onTap = { [weak self] in self?.addBotTapped() }
         let rosterHead = UI.stack([rosterTitle, UIView(), addBot], axis: .horizontal, spacing: 8, alignment: .center)
-        let content = UI.stack([roomName, settingsCard, rosterHead, roster], spacing: 12)
-        content.setCustomSpacing(24, after: settingsCard)
-        scroll.addSubview(content)
+        let setup = UI.scrollColumn(UI.stack([roomName, settingsCard], spacing: 10))
 
-        action.heightAnchor.constraint(equalToConstant: 60).isActive = true
+        action.heightAnchor.constraint(equalToConstant: 48).isActive = true
         action.onTap = { [weak self] in self?.actionTapped() }
         hint.textAlignment = .center
-        let bottom = UI.stack([hint, action], spacing: 8)
-        [scroll, bottom].forEach(view.addSubview)
-        let safe = view.safeAreaLayoutGuide
-        NSLayoutConstraint.activate([
-            scroll.topAnchor.constraint(equalTo: safe.topAnchor, constant: 56),
-            scroll.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            scroll.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            scroll.bottomAnchor.constraint(equalTo: bottom.topAnchor, constant: -10),
-            content.topAnchor.constraint(equalTo: scroll.contentLayoutGuide.topAnchor, constant: 8),
-            content.bottomAnchor.constraint(equalTo: scroll.contentLayoutGuide.bottomAnchor, constant: -20),
-            content.leadingAnchor.constraint(equalTo: scroll.frameLayoutGuide.leadingAnchor, constant: UI.gutter),
-            content.trailingAnchor.constraint(equalTo: scroll.frameLayoutGuide.trailingAnchor, constant: -UI.gutter),
-            bottom.leadingAnchor.constraint(equalTo: safe.leadingAnchor, constant: UI.gutter),
-            bottom.trailingAnchor.constraint(equalTo: safe.trailingAnchor, constant: -UI.gutter),
-            bottom.bottomAnchor.constraint(equalTo: safe.bottomAnchor, constant: -12),
-        ])
+        hint.numberOfLines = 2
+        let drivers = UI.stack([rosterHead, UI.scrollColumn(roster), hint, action], spacing: 8)
+        placeBody(UI.columns(setup, drivers, leadingShare: 0.54), below: header)
 
         client.onChange = { [weak self] in self?.reload() }
         client.onDisconnect = { [weak self] reason in self?.disconnected(reason) }
@@ -226,10 +200,10 @@ final class LobbyViewController: ScreenController {
         settingsCard.subviews.forEach { $0.removeFromSuperview() }
         let host = client.isHost
         let track = min(max(s.trackIndex, 0), TrackLibrary.all.count - 1)
-        let map = TrackMaps.map(track, size: 64)
+        let map = TrackMaps.map(track, size: 48)
         let definition = TrackMaps.definition(track)
         let length = TrackMaps.path(definition).totalLength
-        let trackText = UI.stack([UI.caps("TRACK", 9), UI.label(definition.name.uppercased(), UI.font(16, .black)),
+        let trackText = UI.stack([UI.caps("TRACK", 9), UI.label(definition.name.uppercased(), UI.font(14, .black)),
                                   UI.caps(String(format: "%.1f KM", length / 1000), 9, UI.color(definition.theme.neonA))], spacing: 2)
         var trackViews: [UIView] = [map, trackText]
         if host {
@@ -253,7 +227,7 @@ final class LobbyViewController: ScreenController {
         let note = UI.body(s.stake > 0
                            ? "Everyone pays \(Economy.credits(s.stake)) at the start. The pot goes 60/30/10 to the top three drivers."
                            : "Friendly race: no buy-in. Everyone still earns for taking part.", 12, UI.faint)
-        settingsCard.fill(with: UI.stack([trackRow, laps, stakes, note], spacing: 14), inset: 14)
+        settingsCard.fill(with: UI.stack([trackRow, laps, stakes, note], spacing: 8), inset: 12)
     }
 
     private func chips(title: String, options: [Int], current: Int, label: (Int) -> String,

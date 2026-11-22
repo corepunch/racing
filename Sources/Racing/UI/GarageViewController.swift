@@ -60,7 +60,7 @@ final class GarageViewController: UIViewController {
 
     override var prefersStatusBarHidden: Bool { true }
     override var prefersHomeIndicatorAutoHidden: Bool { true }
-    override var supportedInterfaceOrientations: UIInterfaceOrientationMask { .portrait }
+    override var supportedInterfaceOrientations: UIInterfaceOrientationMask { .landscape }
 
     private func buildLayout() {
         let title = UI.label("GARAGE", UI.font(26, .black))
@@ -143,10 +143,10 @@ final class GarageViewController: UIViewController {
 
         studio.translatesAutoresizingMaskIntoConstraints = false
         dimensions.accessibilityLabel = "Car length and width"
-        [header, studio, dimensions, panel, apply].forEach(view.addSubview)
+        let controls = UI.stack([UI.scrollColumn(panel), apply], spacing: 8)
+        let columns = UI.columns(studio, controls, leadingShare: 0.44, spacing: 16)
+        [header, columns, dimensions].forEach(view.addSubview)
         let safe = view.safeAreaLayoutGuide
-        let fitting = studio.heightAnchor.constraint(greaterThanOrEqualToConstant: 114)
-        fitting.priority = .defaultHigh
         NSLayoutConstraint.activate([
             header.leadingAnchor.constraint(equalTo: safe.leadingAnchor, constant: 16),
             header.trailingAnchor.constraint(equalTo: safe.trailingAnchor, constant: -16),
@@ -154,17 +154,12 @@ final class GarageViewController: UIViewController {
             header.heightAnchor.constraint(equalToConstant: 44),
             back.heightAnchor.constraint(equalToConstant: 44),
 
-            studio.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 6),
-            studio.leadingAnchor.constraint(equalTo: safe.leadingAnchor, constant: 14),
-            studio.trailingAnchor.constraint(equalTo: safe.trailingAnchor, constant: -14),
-            studio.bottomAnchor.constraint(equalTo: panel.topAnchor, constant: -10),
-            fitting,
+            columns.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 6),
+            columns.leadingAnchor.constraint(equalTo: header.leadingAnchor),
+            columns.trailingAnchor.constraint(equalTo: header.trailingAnchor),
+            columns.bottomAnchor.constraint(equalTo: safe.bottomAnchor, constant: -8),
             dimensions.leadingAnchor.constraint(equalTo: studio.leadingAnchor, constant: 12),
             dimensions.bottomAnchor.constraint(equalTo: studio.bottomAnchor, constant: -8),
-
-            panel.leadingAnchor.constraint(equalTo: studio.leadingAnchor),
-            panel.trailingAnchor.constraint(equalTo: studio.trailingAnchor),
-            panel.bottomAnchor.constraint(equalTo: apply.topAnchor, constant: -10),
 
             mountMessage.leadingAnchor.constraint(equalTo: context.leadingAnchor, constant: 10),
             mountMessage.centerYAnchor.constraint(equalTo: context.centerYAnchor),
@@ -178,9 +173,6 @@ final class GarageViewController: UIViewController {
             wheelControl.topAnchor.constraint(equalTo: context.topAnchor, constant: 4),
             wheelControl.bottomAnchor.constraint(equalTo: context.bottomAnchor, constant: -4),
 
-            apply.leadingAnchor.constraint(equalTo: studio.leadingAnchor),
-            apply.trailingAnchor.constraint(equalTo: studio.trailingAnchor),
-            apply.bottomAnchor.constraint(equalTo: safe.bottomAnchor, constant: -8),
             apply.heightAnchor.constraint(equalToConstant: 48),
         ])
     }
@@ -307,9 +299,7 @@ private final class GaragePaintPicker: UIViewController {
         initial = color
         self.onChoose = onChoose
         super.init(nibName: nil, bundle: nil)
-        modalPresentationStyle = .pageSheet
-        sheetPresentationController?.detents = [.medium(), .large()]
-        sheetPresentationController?.prefersGrabberVisible = true
+        modalPresentationStyle = .fullScreen
     }
 
     required init?(coder: NSCoder) { fatalError() }
@@ -322,7 +312,7 @@ private final class GaragePaintPicker: UIViewController {
         title.accessibilityTraits = .header
         sample.layer.cornerRadius = 7
         sample.widthAnchor.constraint(equalToConstant: 46).isActive = true
-        sample.heightAnchor.constraint(equalToConstant: 30).isActive = true
+        sample.heightAnchor.constraint(equalToConstant: 42).isActive = true
         let header = UIStackView(arrangedSubviews: [title, code, sample])
         header.spacing = 10
         header.alignment = .center
@@ -363,16 +353,15 @@ private final class GaragePaintPicker: UIViewController {
         actions.spacing = 8
         actions.heightAnchor.constraint(equalToConstant: 44).isActive = true
 
-        let content = UIStackView(arrangedSubviews: [header] + rows + [actions])
-        content.axis = .vertical
-        content.spacing = 12
-        content.translatesAutoresizingMaskIntoConstraints = false
+        let preview = UI.scrollColumn(UI.stack([header, actions], spacing: 22), centered: true)
+        let content = UI.columns(preview, UI.scrollColumn(UI.stack(rows, spacing: 6), centered: true))
         view.addSubview(content)
         let safe = view.safeAreaLayoutGuide
         NSLayoutConstraint.activate([
-            content.leadingAnchor.constraint(equalTo: safe.leadingAnchor, constant: 20),
-            content.trailingAnchor.constraint(equalTo: safe.trailingAnchor, constant: -20),
-            content.topAnchor.constraint(equalTo: safe.topAnchor, constant: 24),
+            content.leadingAnchor.constraint(equalTo: safe.leadingAnchor, constant: UI.gutter),
+            content.trailingAnchor.constraint(equalTo: safe.trailingAnchor, constant: -UI.gutter),
+            content.topAnchor.constraint(equalTo: safe.topAnchor, constant: 12),
+            content.bottomAnchor.constraint(equalTo: safe.bottomAnchor, constant: -12),
         ])
         updateSample()
     }

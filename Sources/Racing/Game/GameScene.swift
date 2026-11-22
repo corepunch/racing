@@ -70,7 +70,8 @@ struct RaceResult {
 enum RaceEvent {
     /// 3, 2, 1, then 0 for GO.
     case countdown(Int)
-    case wallHit(Float)
+    case collision(Float)
+    case hardLanding(Float)
     case boost
     case lap(time: Float, best: Bool, lapsLeft: Int)
     case finished(RaceResult)
@@ -79,6 +80,8 @@ enum RaceEvent {
 /// What the HUD shows, copied out once a frame.
 struct HUDState {
     var speedKMH: Float = 0
+    var engineRunning = false
+    var skidding: Float = 0
     var lap = 1
     var laps = 3
     var position = 1
@@ -106,7 +109,7 @@ enum Records {
 
 /// Owns the scene, the cars, the camera and the race itself. The per-frame loop
 /// runs from SceneKit's render callback.
-final class GameScene: NSObject, SCNSceneRendererDelegate {
+final class GameScene: NSObject, SCNSceneRendererDelegate, SCNPhysicsContactDelegate {
 
     let scene = SCNScene()
     let track: TrackPath
@@ -129,12 +132,20 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
     private var camera: SCNCamera!
     private var cameraForward: SIMD3<Float>?
     private var cameraLead: Float = 0
-    private var cameraFOV: Float = 70
+    private var cameraFOV: Float = 90
 
     // --- Inputs (set by GameViewController) ---
-    var steerInput: Float = 0
-    var brakeInput: Float = 0
-    var throttleInput: Float = 1
+    private var driverInput = CarInput(throttle: 0)
+    var controls: CarInput {
+        get {
+            lock.lock(); defer { lock.unlock() }
+            return driverInput
+        }
+        set {
+            lock.lock(); defer { lock.unlock() }
+            driverInput = newValue
+        }
+    }
 
     /// Demo for the track recorder: the player's car glides round the lap, no race.
     var autoDrive = false {
@@ -247,6 +258,8 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
             car.install(in: scene.physicsWorld)
             if remote[i] { car.setRemote() }
         }
+        player.node.physicsBody?.contactTestBitMask = PhysicsCategory.car | PhysicsCategory.track
+        scene.physicsWorld.contactDelegate = self
         if config.isStreetRace {
             contactShadows = cars.map { car in
                 car.installHeadlights()
@@ -328,7 +341,8 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
 
     private func setupCamera() {
         camera               = SCNCamera()
-        camera.fieldOfView   = 70
+        camera.projectionDirection = .horizontal
+        camera.fieldOfView   = CGFloat(cameraFOV)
         camera.zFar          = 2400
         camera.zNear         = 0.5
         // HDR is only on for the bloom around the generated emissive markings.
@@ -393,6 +407,9 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
     }
 
     func renderer(_ renderer: SCNSceneRenderer, didSimulatePhysicsAtTime time: TimeInterval) {
+        if !autoDrive {
+            for car in cars { car.enforceGround(on: track) }
+        }
         for (car, shadow) in zip(cars, contactShadows) {
             let pose = car.node.presentation
             let position = pose.simdWorldPosition
@@ -469,6 +486,21 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
 
     // MARK: - Race
 
+    func physicsWorld(_ world: SCNPhysicsWorld, didBegin contact: SCNPhysicsContact) {
+        guard case .racing = phase, !autoDrive, player.finishTime == nil else { return }
+        guard contact.nodeA === player.node || contact.nodeB === player.node else { return }
+        let impact = Float(contact.collisionImpulse / Car.mass)
+        guard impact > 1 else { return }
+        let other = contact.nodeA === player.node ? contact.nodeB : contact.nodeA
+        if other.physicsBody?.categoryBitMask == PhysicsCategory.track {
+            // The track is one collider. Only its side faces count as barrier hits.
+            let normal = contact.contactNormal
+            let across = simd_dot(SIMD3(normal.x, normal.y, normal.z), track.frame(at: player.s).right)
+            guard abs(across) > 0.7 else { return }
+        }
+        emit(.collision(impact))
+    }
+
     private func stepCars(dt: Float) {
         let length = track.totalLength
         let playerFinished = player.finishTime != nil
@@ -477,7 +509,7 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
             if remote[i] { continue }
             let human = i == 0 && debugDriver != .rival && !playerFinished
             if human {
-                var input = CarInput(steer: steerInput, brake: brakeInput, throttle: throttleInput)
+                var input = controls
                 if debugDriver == .handsOff { input = CarInput() }
                 if debugDriver == .casual {
                     steerHistory.append(RivalDriver.input(for: car, track: track).steer)
@@ -504,8 +536,9 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
                 car.giveBoost()
             }
 
-            if i == 0 {
-                if car.pendingHit > 0 { emit(.wallHit(car.pendingHit)); spark(at: car); telemetryHits += 1 }
+            if i == 0, !playerFinished {
+                if car.pendingHit > 0 { emit(.collision(car.pendingHit)); spark(at: car); telemetryHits += 1 }
+                if car.landingSpeed > 0 { emit(.hardLanding(car.landingSpeed)) }
                 if car.pendingBoost { emit(.boost) }
                 if car.scraping { telemetryScrape += dt }
             }
@@ -599,6 +632,9 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
         var state = HUDState()
         let order = ranking()
         state.speedKMH = player.speed * 3.6
+        state.engineRunning = player.finishTime == nil
+        let slipSpeed = abs(player.lateralSpeed - player.speed * sin(player.heading))
+        state.skidding = state.engineRunning ? min(1, max(0, (slipSpeed - 3) / 10)) : 0
         state.laps = config.laps
         state.lap = min(config.laps, max(1, lapsDone.first.map { $0 + 1 } ?? 1))
         state.position = (order.firstIndex { $0 === player } ?? 0) + 1
@@ -709,7 +745,7 @@ final class GameScene: NSObject, SCNSceneRendererDelegate {
         cameraNode.simdPosition = position
         cameraNode.simdLook(at: car.worldPosition + forward * 14 + up * 0.8, up: up, localFront: SIMD3<Float>(0, 0, -1))
 
-        let fov = 66 + min(car.speed, 120) * 0.15 + boosting * 7
+        let fov = 90 + min(car.speed, 120) * 0.14 + boosting * 6
         cameraFOV += (fov - cameraFOV) * (dt > 0 ? min(1, 4 * dt) : 1)
         camera.fieldOfView = CGFloat(cameraFOV)
     }

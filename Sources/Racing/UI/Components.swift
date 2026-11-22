@@ -28,9 +28,10 @@ extension UI {
         UIImage(systemName: name, withConfiguration: UIImage.SymbolConfiguration(pointSize: size, weight: weight))
     }
 
-    static func haptic(_ style: UIImpactFeedbackGenerator.FeedbackStyle = .light) {
+    static func haptic(_ style: UIImpactFeedbackGenerator.FeedbackStyle = .light, intensity: CGFloat? = nil) {
         guard Profile.shared.haptics else { return }
-        UIImpactFeedbackGenerator(style: style).impactOccurred()
+        let generator = UIImpactFeedbackGenerator(style: style)
+        if let intensity { generator.impactOccurred(intensity: intensity) } else { generator.impactOccurred() }
     }
 
     static func stack(_ views: [UIView], axis: NSLayoutConstraint.Axis = .vertical, spacing: CGFloat = 8,
@@ -41,6 +42,47 @@ extension UI {
         s.alignment = alignment
         s.translatesAutoresizingMaskIntoConstraints = false
         return s
+    }
+
+    static func scrollColumn(_ content: UIView, centered: Bool = false) -> UIScrollView {
+        let scroll = UIScrollView()
+        scroll.translatesAutoresizingMaskIntoConstraints = false
+        scroll.contentInsetAdjustmentBehavior = .never
+        scroll.keyboardDismissMode = .onDrag
+        let column = UIView()
+        column.translatesAutoresizingMaskIntoConstraints = false
+        scroll.addSubview(column)
+        column.addSubview(content)
+        let guide = scroll.contentLayoutGuide
+        let fitHeight = column.heightAnchor.constraint(equalTo: scroll.frameLayoutGuide.heightAnchor)
+        fitHeight.priority = .defaultLow
+        NSLayoutConstraint.activate([
+            column.leadingAnchor.constraint(equalTo: guide.leadingAnchor),
+            column.trailingAnchor.constraint(equalTo: guide.trailingAnchor),
+            column.topAnchor.constraint(equalTo: guide.topAnchor),
+            column.bottomAnchor.constraint(equalTo: guide.bottomAnchor),
+            column.widthAnchor.constraint(equalTo: scroll.frameLayoutGuide.widthAnchor),
+            content.leadingAnchor.constraint(equalTo: column.leadingAnchor),
+            content.trailingAnchor.constraint(equalTo: column.trailingAnchor),
+            content.topAnchor.constraint(greaterThanOrEqualTo: column.topAnchor, constant: 4),
+            content.bottomAnchor.constraint(lessThanOrEqualTo: column.bottomAnchor, constant: -4),
+            centered ? content.centerYAnchor.constraint(equalTo: column.centerYAnchor)
+                     : content.topAnchor.constraint(equalTo: column.topAnchor, constant: 4),
+            fitHeight,
+        ])
+        return scroll
+    }
+
+    static func columns(_ leading: UIView, _ trailing: UIView, leadingShare: CGFloat = 0.5,
+                        spacing: CGFloat = 20, alignment: UIStackView.Alignment = .fill) -> UIStackView {
+        let pair = stack([leading, trailing], axis: .horizontal, spacing: spacing, alignment: alignment)
+        if leadingShare == 0.5 {
+            pair.distribution = .fillEqually
+        } else {
+            leading.widthAnchor.constraint(equalTo: trailing.widthAnchor,
+                                           multiplier: leadingShare / (1 - leadingShare)).isActive = true
+        }
+        return pair
     }
 }
 
@@ -61,7 +103,7 @@ final class BackdropView: UIView {
     required init?(coder: NSCoder) { fatalError() }
 }
 
-/// Base for menu screens: backdrop, dark style, portrait, no status bar.
+/// Base for menu screens: backdrop, dark style, landscape, no status bar.
 class ScreenController: UIViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -79,13 +121,24 @@ class ScreenController: UIViewController {
         view.addSubview(header)
         NSLayoutConstraint.activate([
             header.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
-            header.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            header.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            header.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor),
+            header.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor),
         ])
         return header
     }
 
-    override var supportedInterfaceOrientations: UIInterfaceOrientationMask { .portrait }
+    func placeBody(_ body: UIView, below header: UIView) {
+        view.addSubview(body)
+        let safe = view.safeAreaLayoutGuide
+        NSLayoutConstraint.activate([
+            body.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 4),
+            body.leadingAnchor.constraint(equalTo: safe.leadingAnchor, constant: UI.gutter),
+            body.trailingAnchor.constraint(equalTo: safe.trailingAnchor, constant: -UI.gutter),
+            body.bottomAnchor.constraint(equalTo: safe.bottomAnchor, constant: -8),
+        ])
+    }
+
+    override var supportedInterfaceOrientations: UIInterfaceOrientationMask { .landscape }
     override var prefersStatusBarHidden: Bool { true }
     override var prefersHomeIndicatorAutoHidden: Bool { true }
 }
@@ -398,7 +451,6 @@ class CardView: UIView {
 /// Square-ish menu tile: icon, title, one line of detail.
 final class TileButton: UIControl {
     var onTap: (() -> Void)?
-    private let detailLabel = UI.label("", UI.font(10, .semibold, wide: false), UI.faint)
 
     init(title: String, symbol: String, tint: UIColor = UI.cyan) {
         super.init(frame: .zero)
@@ -412,18 +464,15 @@ final class TileButton: UIControl {
         icon.tintColor = tint
         icon.translatesAutoresizingMaskIntoConstraints = false
         icon.contentMode = .scaleAspectFit
-        let titleLabel = UI.label(title, UI.font(12, .black))
-        [icon, titleLabel, detailLabel].forEach(addSubview)
+        let titleLabel = UI.label(title, UI.font(12, .black, wide: false), .white, align: .center)
+        let content = UI.stack([icon, titleLabel], spacing: 8, alignment: .center)
+        content.isUserInteractionEnabled = false
+        addSubview(content)
         NSLayoutConstraint.activate([
-            icon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14),
-            icon.topAnchor.constraint(equalTo: topAnchor, constant: 14),
+            content.centerXAnchor.constraint(equalTo: centerXAnchor),
+            content.centerYAnchor.constraint(equalTo: centerYAnchor),
+            content.widthAnchor.constraint(lessThanOrEqualTo: widthAnchor, constant: -8),
             icon.heightAnchor.constraint(equalToConstant: 22),
-            titleLabel.leadingAnchor.constraint(equalTo: icon.leadingAnchor),
-            titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -8),
-            titleLabel.bottomAnchor.constraint(equalTo: detailLabel.topAnchor, constant: -2),
-            detailLabel.leadingAnchor.constraint(equalTo: icon.leadingAnchor),
-            detailLabel.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -8),
-            detailLabel.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -12),
         ])
         isAccessibilityElement = true
         accessibilityLabel = title
@@ -432,11 +481,6 @@ final class TileButton: UIControl {
     }
 
     required init?(coder: NSCoder) { fatalError() }
-
-    var detail: String? {
-        get { detailLabel.text }
-        set { detailLabel.text = newValue; accessibilityValue = newValue }
-    }
 
     override var isHighlighted: Bool {
         didSet {
@@ -550,7 +594,7 @@ final class SegmentSwitch: UIControl {
     }
 }
 
-/// A modal card that slides up from the bottom: confirmations, event details, messages.
+/// Centered landscape dialog for confirmations, event details, and messages.
 /// Built in-house so it matches the rest of the menus.
 final class SheetController: UIViewController {
     private let content: UIView
@@ -575,50 +619,39 @@ final class SheetController: UIViewController {
         dim.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         dim.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(closeTapped)))
         view.addSubview(dim)
-        card.layer.cornerRadius = 26
-        card.layer.maskedCorners = [.layerMinXMinYCorner, .layerMaxXMinYCorner]
         view.addSubview(card)
-        let grabber = UIView()
-        grabber.translatesAutoresizingMaskIntoConstraints = false
-        grabber.backgroundColor = UIColor(white: 1, alpha: 0.2)
-        grabber.layer.cornerRadius = 2.5
+        let close = CircleButton(symbol: "xmark", size: 36)
+        close.accessibilityLabel = "Close"
+        close.onTap = { [weak self] in self?.closeTapped() }
         content.translatesAutoresizingMaskIntoConstraints = false
-        card.addSubview(grabber)
-        card.addSubview(content)
+        let scroll = UI.scrollColumn(content)
+        card.addSubview(scroll)
+        card.addSubview(close)
+        let safe = view.safeAreaLayoutGuide
+        let width = card.widthAnchor.constraint(equalTo: safe.widthAnchor, constant: -64)
+        width.priority = .defaultHigh
+        let fitHeight = scroll.heightAnchor.constraint(equalTo: content.heightAnchor, constant: 8)
+        fitHeight.priority = .defaultHigh
         NSLayoutConstraint.activate([
-            card.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            card.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            card.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: 30),
-            card.topAnchor.constraint(greaterThanOrEqualTo: view.safeAreaLayoutGuide.topAnchor, constant: 40),
-            grabber.topAnchor.constraint(equalTo: card.topAnchor, constant: 8),
-            grabber.centerXAnchor.constraint(equalTo: card.centerXAnchor),
-            grabber.widthAnchor.constraint(equalToConstant: 38),
-            grabber.heightAnchor.constraint(equalToConstant: 5),
-            content.topAnchor.constraint(equalTo: card.topAnchor, constant: 28),
-            content.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 22),
-            content.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -22),
-            content.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -12),
+            card.centerXAnchor.constraint(equalTo: safe.centerXAnchor),
+            card.centerYAnchor.constraint(equalTo: safe.centerYAnchor),
+            card.topAnchor.constraint(greaterThanOrEqualTo: safe.topAnchor, constant: 8),
+            card.bottomAnchor.constraint(lessThanOrEqualTo: safe.bottomAnchor, constant: -8),
+            card.widthAnchor.constraint(lessThanOrEqualToConstant: 720),
+            width,
+            close.topAnchor.constraint(equalTo: card.topAnchor, constant: 8),
+            close.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -10),
+            scroll.topAnchor.constraint(equalTo: close.bottomAnchor),
+            scroll.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 18),
+            scroll.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -18),
+            scroll.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -14),
+            fitHeight,
         ])
-        let swipe = UISwipeGestureRecognizer(target: self, action: #selector(closeTapped))
-        swipe.direction = .down
-        card.addGestureRecognizer(swipe)
-    }
-
-    override func viewWillAppear(_ animated: Bool) {
-        super.viewWillAppear(animated)
-        view.layoutIfNeeded()
-        card.transform = CGAffineTransform(translationX: 0, y: card.bounds.height)
-        UIView.animate(withDuration: 0.42, delay: 0, usingSpringWithDamping: 0.88, initialSpringVelocity: 0) {
-            self.card.transform = .identity
-        }
     }
 
     @objc private func closeTapped() { close(then: nil) }
 
     func close(then action: (() -> Void)?) {
-        UIView.animate(withDuration: 0.22, animations: {
-            self.card.transform = CGAffineTransform(translationX: 0, y: self.card.bounds.height)
-        })
         dismiss(animated: true) { [onDismiss] in
             onDismiss?()
             action?()
@@ -632,17 +665,18 @@ final class SheetController: UIViewController {
         titleLabel.numberOfLines = 2
         let body = UI.body(message, 14)
         let go = GlowButton(confirm, tint: tint, filled: true, size: 15)
-        go.heightAnchor.constraint(equalToConstant: 56).isActive = true
-        var views: [UIView] = [titleLabel, body, go]
+        go.heightAnchor.constraint(equalToConstant: 48).isActive = true
+        var buttons: [UIView] = [go]
         var cancelButton: GlowButton?
         if let cancel {
             let c = GlowButton(cancel, tint: UIColor(white: 1, alpha: 0.7), size: 13)
             c.heightAnchor.constraint(equalToConstant: 48).isActive = true
-            views.append(c)
+            buttons.insert(c, at: 0)
             cancelButton = c
         }
-        let stack = UI.stack(views, spacing: 12)
-        stack.setCustomSpacing(22, after: body)
+        let actions = UI.stack(buttons, axis: .horizontal, spacing: 10)
+        actions.distribution = .fillEqually
+        let stack = UI.stack([titleLabel, body, actions], spacing: 12)
         let sheet = SheetController(content: stack)
         go.onTap = { [weak sheet] in sheet?.close(then: action) }
         cancelButton?.onTap = { [weak sheet] in sheet?.close(then: nil) }

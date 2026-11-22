@@ -265,9 +265,7 @@ enum TrackMeshBuilder {
     private static func collisionGeometry(path: TrackPath) -> SCNGeometry {
         var mesh = MeshBuilder(materialCount: 1)
         let rows = path.samples.map { sample in
-            let edge = sample.right * (sample.halfWidth + barrierOffset)
-            let left = sample.position - edge
-            let right = sample.position + edge
+            let (left, right) = sample.deckEdges
             let top = sample.up * 6
             let foot = sample.up
             return (left: mesh.vertex(left, .zero), right: mesh.vertex(right, .zero),

@@ -91,16 +91,14 @@ enum RaceLauncher {
 final class EventsViewController: ScreenController {
     private let profile = Profile.shared
     private let switcher = SegmentSwitch(["STREET", "CIRCUIT"])
-    private let scroll = UIScrollView()
+    private var scroll: UIScrollView!
     private let content = UI.stack([], spacing: 12)
-    private let carStrip = UIView()
     private let carName = UI.label("", UI.font(14, .black))
     private let carBadge = ClassBadge()
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        addHeader("RACE")
-        buildLayout()
+        buildLayout(below: addHeader("RACE"))
         switcher.onChange = { [weak self] _ in self?.reload(animated: true) }
         NotificationCenter.default.addObserver(self, selector: #selector(changed), name: Profile.didChange, object: nil)
     }
@@ -115,7 +113,7 @@ final class EventsViewController: ScreenController {
         reload(animated: false)
     }
 
-    private func buildLayout() {
+    private func buildLayout(below header: UIView) {
         // The car you'd be racing, so the class rules make sense at a glance.
         let strip = CardView()
         let label = UI.caps("RACING IN", 9)
@@ -130,28 +128,9 @@ final class EventsViewController: ScreenController {
         change.setContentHuggingPriority(.required, for: .horizontal)
         strip.fill(with: row, inset: 12)
 
-        scroll.translatesAutoresizingMaskIntoConstraints = false
-        scroll.alwaysBounceVertical = true
-        scroll.showsVerticalScrollIndicator = false
-        scroll.addSubview(content)
-        [switcher, strip, scroll].forEach(view.addSubview)
-        let safe = view.safeAreaLayoutGuide
-        NSLayoutConstraint.activate([
-            switcher.topAnchor.constraint(equalTo: safe.topAnchor, constant: 62),
-            switcher.leadingAnchor.constraint(equalTo: safe.leadingAnchor, constant: UI.gutter),
-            switcher.trailingAnchor.constraint(equalTo: safe.trailingAnchor, constant: -UI.gutter),
-            strip.topAnchor.constraint(equalTo: switcher.bottomAnchor, constant: 12),
-            strip.leadingAnchor.constraint(equalTo: switcher.leadingAnchor),
-            strip.trailingAnchor.constraint(equalTo: switcher.trailingAnchor),
-            scroll.topAnchor.constraint(equalTo: strip.bottomAnchor, constant: 4),
-            scroll.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            scroll.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            scroll.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-            content.topAnchor.constraint(equalTo: scroll.contentLayoutGuide.topAnchor, constant: 14),
-            content.bottomAnchor.constraint(equalTo: scroll.contentLayoutGuide.bottomAnchor, constant: -40),
-            content.leadingAnchor.constraint(equalTo: scroll.frameLayoutGuide.leadingAnchor, constant: UI.gutter),
-            content.trailingAnchor.constraint(equalTo: scroll.frameLayoutGuide.trailingAnchor, constant: -UI.gutter),
-        ])
+        scroll = UI.scrollColumn(content)
+        let selection = UI.scrollColumn(UI.stack([switcher, strip], spacing: 10))
+        placeBody(UI.columns(selection, scroll, leadingShare: 0.34), below: header)
     }
 
     private func reload(animated: Bool) {
@@ -233,9 +212,11 @@ final class EventsViewController: ScreenController {
         warning.isHidden = problem == nil
         start.isEnabled = problem == nil
 
-        let stack = UI.stack([title, place, mapRow, payouts, body, warning, start], spacing: 12)
-        stack.setCustomSpacing(4, after: title)
-        stack.setCustomSpacing(18, after: body)
+        title.numberOfLines = 0
+        place.numberOfLines = 0
+        let track = UI.stack([title, place, mapRow], spacing: 8)
+        let details = UI.stack([payouts, body, warning, start], spacing: 12)
+        let stack = UI.columns(track, details, leadingShare: 0.38, alignment: .center)
         let sheet = SheetController(content: stack)
         start.onTap = { [weak self, weak sheet] in
             sheet?.close { if let self { RaceLauncher.circuit(event, from: self) } }

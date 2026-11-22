@@ -67,12 +67,15 @@ final class MenuViewController: ScreenController {
         garageTile.onTap = { [weak self] in self?.navigationController?.pushViewController(TuneViewController(), animated: true) }
         dealerTile.onTap = { [weak self] in self?.navigationController?.pushViewController(DealerViewController(), animated: true) }
         onlineTile.onTap = { [weak self] in self?.navigationController?.pushViewController(OnlineViewController(), animated: true) }
-        onlineTile.detail = "Local network"
         let tiles = UI.stack([garageTile, dealerTile, onlineTile], axis: .horizontal, spacing: 10)
         tiles.distribution = .fillEqually
 
-        let lower = UI.stack([info, race, tiles], spacing: 16)
-        lower.setCustomSpacing(20, after: info)
+        let actions = UI.scrollColumn(UI.stack([race, tiles], spacing: 10), centered: true)
+        let preview = UI.stack([showroom, dots, info], spacing: 6)
+        showroom.setContentHuggingPriority(.init(1), for: .vertical)
+        let columns = UI.columns(preview, actions, leadingShare: 0.53, spacing: 24)
+        carName.adjustsFontSizeToFitWidth = true
+        carName.minimumScaleFactor = 0.65
 
         showroom.onIndexChange = { [weak self] i in self?.showInfo(i, animated: true) }
         showroom.onSettle = { [weak self] i in
@@ -80,28 +83,20 @@ final class MenuViewController: ScreenController {
             self.profile.select(self.shown[i].id)
         }
 
-        [showroom, brand, topRight, dots, lower].forEach(view.addSubview)
+        [brand, topRight, columns].forEach(view.addSubview)
         let safe = view.safeAreaLayoutGuide
         NSLayoutConstraint.activate([
             brand.topAnchor.constraint(equalTo: safe.topAnchor, constant: 8),
             brand.leadingAnchor.constraint(equalTo: safe.leadingAnchor, constant: UI.gutter),
             topRight.centerYAnchor.constraint(equalTo: brand.centerYAnchor),
             topRight.trailingAnchor.constraint(equalTo: safe.trailingAnchor, constant: -UI.gutter),
-
-            showroom.topAnchor.constraint(equalTo: brand.bottomAnchor, constant: 0),
-            showroom.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            showroom.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            showroom.bottomAnchor.constraint(equalTo: dots.topAnchor, constant: -6),
-
-            dots.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            dots.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            dots.bottomAnchor.constraint(equalTo: lower.topAnchor, constant: -18),
-
-            lower.leadingAnchor.constraint(equalTo: safe.leadingAnchor, constant: UI.gutter),
-            lower.trailingAnchor.constraint(equalTo: safe.trailingAnchor, constant: -UI.gutter),
-            lower.bottomAnchor.constraint(equalTo: safe.bottomAnchor, constant: -12),
+            columns.topAnchor.constraint(equalTo: brand.bottomAnchor, constant: 10),
+            columns.leadingAnchor.constraint(equalTo: brand.leadingAnchor),
+            columns.trailingAnchor.constraint(equalTo: topRight.trailingAnchor),
+            columns.bottomAnchor.constraint(equalTo: safe.bottomAnchor, constant: -8),
+            showroom.heightAnchor.constraint(greaterThanOrEqualToConstant: 70),
             race.heightAnchor.constraint(equalToConstant: 62),
-            tiles.heightAnchor.constraint(equalToConstant: 92),
+            tiles.heightAnchor.constraint(equalToConstant: 88),
         ])
     }
 
@@ -127,8 +122,6 @@ final class MenuViewController: ScreenController {
         showInfo(showroom.index, animated: false)
         record.attributedText = NSAttributedString(
             string: "\(profile.wins) WINS  ·  \(profile.races) RACES", attributes: [.kern: 1.4])
-        garageTile.detail = "Upgrades · parts"
-        dealerTile.detail = "\(Dealer.catalog.count) cars for sale"
     }
 
     private func showInfo(_ i: Int, animated: Bool) {

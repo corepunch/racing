@@ -9,6 +9,11 @@ struct PathSample {
     var arcLength: Float         // cumulative distance from sample[0]
     var halfWidth: Float         // deck half-width in metres
     var curvature: Float = 0     // signed 1/m, positive turning right
+
+    var deckEdges: (left: SIMD3<Float>, right: SIMD3<Float>) {
+        let edge = right * (halfWidth + TrackMeshBuilder.barrierOffset)
+        return (position - edge, position + edge)
+    }
 }
 
 final class TrackPath {
@@ -139,6 +144,31 @@ final class TrackPath {
 
     /// Metres between consecutive samples.
     var step: Float { totalLength / Float(stepCount) }
+
+    /// Signed clearance above the road triangle under this XZ position. Walk from the
+    /// car's lap position so a crossing or a nearby parallel road cannot steal the car.
+    func ground(at position: SIMD3<Float>, near distance: Float) -> (clearance: Float, normal: SIMD3<Float>)? {
+        var index = Int(floor(distance / step))
+        for _ in 0..<stepCount {
+            let a = sample(at: index), b = sample(at: index + 1)
+            if simd_cross(a.right, position - a.position).y < -0.0001 { index -= 1; continue }
+            if simd_cross(b.right, position - b.position).y > 0.0001 { index += 1; continue }
+
+            let start = a.deckEdges, end = b.deckEdges
+            let offset = position - start.left
+            guard simd_cross(end.right - start.right, position - start.right).y >= -0.001,
+                  simd_cross(start.left - end.left, position - end.left).y >= -0.001 else { return nil }
+            // Same diagonal as the two triangles in the collision deck.
+            let diagonal = end.right - start.left
+            let normal = simd_cross(offset, diagonal).y >= 0
+                ? simd_cross(start.right - start.left, diagonal)
+                : simd_cross(diagonal, end.left - start.left)
+            guard normal.y > 0 else { return nil }
+            let up = simd_normalize(normal)
+            return (simd_dot(offset, up), up)
+        }
+        return nil
+    }
 
     /// The deck frame at any distance round the lap (wraps), interpolated between samples.
     func frame(at distance: Float) -> PathSample {

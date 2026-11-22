@@ -5,18 +5,19 @@ import SceneKit
 final class GameViewController: UIViewController {
 
     private let config: RaceConfig
+    private let audio = GameAudio.shared
     private var scnView: SCNView!
     private var gameScene: GameScene!
     private var hud: HUDView!
-    private var controlsView: InputView!
+    private let controls = RaceControls()
+    private var menuWasPressed = false
     private var pauseButton: UIButton!
     private var panel: PanelView?
+    private var resumeRace: (() -> Void)?
     private var hudTimer: Timer?
     private var loading: UIView?
     private var paused = false
-    private let heavy = UIImpactFeedbackGenerator(style: .heavy)
-    private let soft = UIImpactFeedbackGenerator(style: .soft)
-    private let rigid = UIImpactFeedbackGenerator(style: .rigid)
+    private var lastImpactFeedback = -TimeInterval.infinity
 
     /// Books the result (prize money, pink slips) and returns the lines for the results panel.
     var onFinish: ((RaceResult) -> [ResultLine])?
@@ -42,6 +43,19 @@ final class GameViewController: UIViewController {
     }
 
     required init?(coder: NSCoder) { fatalError() }
+
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        audio.startRace()
+        audio.setRacePaused(paused)
+    }
+
+    override func viewDidDisappear(_ animated: Bool) {
+        super.viewDidDisappear(animated)
+        controls.setActive(false)
+        hudTimer?.invalidate()
+        audio.endRace()
+    }
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -90,11 +104,6 @@ final class GameViewController: UIViewController {
         scnView.antialiasingMode         = .none
         scnView.rendersContinuously      = true
 
-        controlsView = InputView(frame: view.bounds)
-        controlsView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        view.addSubview(controlsView)
-        controlsView.becomeFirstResponder()
-
         hud = HUDView(frame: view.bounds)
         hud.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         hud.setTrack(scene.track)
@@ -103,10 +112,14 @@ final class GameViewController: UIViewController {
         pauseButton = UIButton(type: .system)
         pauseButton.setImage(UIImage(systemName: "pause.fill"), for: .normal)
         pauseButton.tintColor = .white
+        pauseButton.accessibilityLabel = "Pause"
         pauseButton.backgroundColor = UIColor(white: 0, alpha: 0.35)
         pauseButton.layer.cornerRadius = 20
         pauseButton.translatesAutoresizingMaskIntoConstraints = false
-        pauseButton.addTarget(self, action: #selector(pauseTapped), for: .touchUpInside)
+        pauseButton.addAction(UIAction { [weak self] _ in
+            UI.haptic()
+            self?.pauseTapped()
+        }, for: .touchUpInside)
         view.addSubview(pauseButton)
         NSLayoutConstraint.activate([
             pauseButton.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -12),
@@ -116,15 +129,18 @@ final class GameViewController: UIViewController {
         ])
 
         let center = NotificationCenter.default
+        let windowScene = view.window?.windowScene
         center.addObserver(self, selector: #selector(appInactive),
-                           name: UIApplication.willResignActiveNotification, object: nil)
+                           name: UIScene.willDeactivateNotification, object: windowScene)
         center.addObserver(self, selector: #selector(appActive),
-                           name: UIApplication.didBecomeActiveNotification, object: nil)
-        if UIApplication.shared.applicationState != .active { appInactive() }
+                           name: UIScene.didActivateNotification, object: windowScene)
+        if let windowScene, windowScene.activationState != .foregroundActive { appInactive() }
 
-        hudTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
+        let timer = Timer(timeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
             self?.poll()
         }
+        RunLoop.main.add(timer, forMode: .common)
+        hudTimer = timer
 
         if let client = online {
             client.reportLoaded()
@@ -141,11 +157,22 @@ final class GameViewController: UIViewController {
     // MARK: - Per-frame
 
     private func poll() {
-        guard let gs = gameScene, !paused else { return }
-        gs.steerInput = controlsView.steer
-        gs.brakeInput = controlsView.brake
-        gs.throttleInput = controlsView.throttle
-        hud.update(gs.hud)
+        guard let gs = gameScene else { return }
+        let foreground = view.window?.windowScene?.activationState == .foregroundActive
+        controls.setActive(foreground && !paused && panel == nil && !pauseButton.isHidden && !autoDrive)
+        let menuPressed = foreground && controls.menuPressed
+        if menuPressed, !menuWasPressed, !pauseButton.isHidden {
+            if panel == nil { pauseTapped() } else { resumeRace?() }
+        }
+        menuWasPressed = menuPressed
+        guard !paused else { return }
+        gs.controls = foreground && panel == nil && !pauseButton.isHidden ? controls.input : CarInput(throttle: 0)
+        hud.setControlHint(controls.instruction)
+        let state = gs.hud
+        hud.update(state)
+        let speed = min(1, abs(state.speedKMH) / (3.6 * config.player.spec.topSpeed))
+        audio.updateCar(speed: speed, skidding: state.skidding, boosting: state.boosting,
+                        engineRunning: state.engineRunning)
         for event in gs.drainEvents() { handle(event) }
         if let client = online, !shownOnlineResults, client.phase == .results, !client.results.isEmpty {
             shownOnlineResults = true
@@ -158,17 +185,20 @@ final class GameViewController: UIViewController {
         case .countdown(let n):
             if n > 0 {
                 hud.flash("\(n)", color: .white)
-                soft.impactOccurred()
+                UI.haptic(.soft)
             } else {
                 hud.flash("GO", color: UI.cyan, hold: 0.9)
-                heavy.impactOccurred()
+                UI.haptic(.heavy)
                 DispatchQueue.main.asyncAfter(deadline: .now() + 6) { [weak self] in self?.hud.setHintVisible(false) }
             }
-        case .wallHit(let impact):
-            rigid.impactOccurred(intensity: CGFloat(min(1, 0.35 + impact / 25)))
+        case .collision(let impact):
+            impactFeedback(.rigid, intensity: min(1, 0.35 + impact / 25))
+            audio.playImpact(strength: impact)
+        case .hardLanding(let impact):
+            impactFeedback(.heavy, intensity: min(1, impact / 12))
         case .boost:
             hud.announce("BOOST", color: UI.amber, hold: 0.9)
-            soft.impactOccurred()
+            UI.haptic(.soft)
         case let .lap(time, best, lapsLeft):
             guard lapsLeft > 0 else { break }
             let text = (best ? "BEST LAP  " : "LAP  ") + UI.time(time)
@@ -179,34 +209,54 @@ final class GameViewController: UIViewController {
         }
     }
 
+    private func impactFeedback(_ style: UIImpactFeedbackGenerator.FeedbackStyle, intensity: Float) {
+        let now = CACurrentMediaTime()
+        guard panel == nil, now - lastImpactFeedback >= 0.18 else { return }
+        lastImpactFeedback = now
+        UI.haptic(style, intensity: CGFloat(intensity))
+    }
+
     // MARK: - Pause and results
 
-    @objc private func pauseTapped() {
+    private func pauseTapped() {
         guard panel == nil, gameScene != nil else { return }
         if online != nil {
             // The race goes on for everyone else; the car just coasts while the panel is up.
-            controlsView.reset()
             let resume = GlowButton("RESUME", filled: true)
-            resume.onTap = { [weak self] in self?.closePanel() }
+            resumeRace = { [weak self] in self?.closePanel() }
+            resume.onTap = resumeRace
             let leave = GlowButton("LEAVE RACE", tint: UI.magenta)
             leave.onTap = { [weak self] in self?.leaveOnline() }
-            show(PanelView(title: "ONLINE", subtitle: "THE RACE KEEPS RUNNING", buttons: [resume, leave]))
+            show(PanelView(title: "ONLINE", subtitle: "THE RACE KEEPS RUNNING", buttons: [resume, soundButton(), leave]))
             return
         }
         setPaused(true)
         let resume = GlowButton("RESUME", filled: true)
-        resume.onTap = { [weak self] in self?.closePanel(); self?.setPaused(false) }
+        resumeRace = { [weak self] in
+            self?.closePanel()
+            self?.setPaused(false)
+        }
+        resume.onTap = resumeRace
         let restart = GlowButton("RESTART")
         restart.onTap = { [weak self] in self?.restart() }
         let quit = GlowButton("QUIT TO MENU", tint: UI.magenta)
         quit.onTap = { [weak self] in self?.quit() }
-        show(PanelView(title: "PAUSED", buttons: [resume, restart, quit]))
+        show(PanelView(title: "PAUSED", buttons: [resume, restart, soundButton(), quit]))
+    }
+
+    private func soundButton() -> GlowButton {
+        let button = GlowButton(audio.isEnabled ? "SOUND ON" : "SOUND OFF")
+        button.accessibilityHint = "Toggles music and sound effects"
+        button.onTap = { [weak button, audio] in
+            audio.isEnabled.toggle()
+            button?.setTitleText(audio.isEnabled ? "SOUND ON" : "SOUND OFF")
+        }
+        return button
     }
 
     private func showResults(_ result: RaceResult) {
-        heavy.impactOccurred()
-        controlsView.reset()
-        controlsView.isUserInteractionEnabled = false
+        UI.haptic(.heavy)
+        controls.setActive(false)
         pauseButton.isHidden = true
         hud.setHintVisible(false)
         let winner = result.standings.first?.time
@@ -251,9 +301,8 @@ final class GameViewController: UIViewController {
 
     /// Finished, but the order is the server's to call: show where things stand until it does.
     private func showWaiting(_ result: RaceResult) {
-        heavy.impactOccurred()
-        controlsView.reset()
-        controlsView.isUserInteractionEnabled = false
+        UI.haptic(.heavy)
+        controls.setActive(false)
         pauseButton.isHidden = true
         hud.setHintVisible(false)
         hud.flash("FINISHED", color: UI.cyan, hold: 1.6)
@@ -286,6 +335,7 @@ final class GameViewController: UIViewController {
     }
 
     private func leaveOnline() {
+        controls.setActive(false)
         hudTimer?.invalidate()
         scnView.isPlaying = false
         let leave = onLeave
@@ -302,6 +352,8 @@ final class GameViewController: UIViewController {
     }
 
     private func show(_ newPanel: PanelView) {
+        controls.setActive(false)
+        gameScene?.controls = CarInput(throttle: 0)
         newPanel.frame = view.bounds
         newPanel.alpha = 0
         view.addSubview(newPanel)
@@ -312,19 +364,20 @@ final class GameViewController: UIViewController {
     private func closePanel() {
         panel?.removeFromSuperview()
         panel = nil
+        resumeRace = nil
     }
 
     private func restart() {
         closePanel()
-        controlsView.reset()
-        controlsView.isUserInteractionEnabled = true
         pauseButton.isHidden = false
         hud.setHintVisible(true)
         gameScene.restart()
+        audio.startRace()
         setPaused(false)
     }
 
     private func quit() {
+        controls.setActive(false)
         hudTimer?.invalidate()
         scnView.isPlaying = false
         dismiss(animated: true)
@@ -332,15 +385,16 @@ final class GameViewController: UIViewController {
 
     private func setPaused(_ value: Bool) {
         paused = value
-        if value { controlsView.reset() }
-        gameScene?.steerInput = 0
-        gameScene?.brakeInput = 0
-        gameScene?.throttleInput = 1
+        audio.setRacePaused(value)
+        if value { controls.setActive(false) }
+        gameScene?.controls = CarInput(throttle: 0)
         gameScene?.setActive(!value)
         scnView?.isPlaying = !value
     }
 
     @objc private func appInactive() {
+        controls.setActive(false)
+        gameScene?.controls = CarInput(throttle: 0)
         guard gameScene != nil, online == nil else { return }
         if panel == nil { pauseTapped() } else { setPaused(true) }
     }
@@ -350,7 +404,7 @@ final class GameViewController: UIViewController {
         if gameScene != nil, online == nil, pauseButton.isHidden { setPaused(false) }
     }
 
-    override var supportedInterfaceOrientations: UIInterfaceOrientationMask { .portrait }
+    override var supportedInterfaceOrientations: UIInterfaceOrientationMask { .landscape }
     override var prefersStatusBarHidden: Bool { true }
     override var prefersHomeIndicatorAutoHidden: Bool { true }
 }

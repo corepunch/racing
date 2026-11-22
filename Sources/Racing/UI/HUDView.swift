@@ -1,6 +1,6 @@
 import UIKit
 
-/// Race read-outs. Everything sits in the top third; the bottom of the screen belongs to the thumb.
+/// Race read-outs leave the lower corners clear for the virtual controller.
 final class HUDView: UIView {
     private let position = UI.label("", UI.font(44, .black), .white)
     private let positionOf = UI.label("", UI.font(13, .bold), UI.dim)
@@ -10,7 +10,7 @@ final class HUDView: UIView {
     private let unit = UI.label("KM/H", UI.font(10, .bold), UI.dim, align: .center)
     private let banner = UI.label("", UI.font(64, .black), .white, align: .center)
     private let note = UI.label("", UI.font(17, .heavy), UI.cyan, align: .center)
-    private let hint = UI.label("SLIDE TO STEER  ·  PULL DOWN TO SLOW, FURTHER TO BRAKE", UI.font(11, .bold), UI.dim, align: .center)
+    private let hint = UI.label("", UI.font(10, .bold, wide: false), .white, align: .center)
     private let map = TrackMapView()
     private var noteToken = 0
     private var bannerToken = 0
@@ -47,11 +47,11 @@ final class HUDView: UIView {
 
             map.trailingAnchor.constraint(equalTo: safe.trailingAnchor, constant: -10),
             map.topAnchor.constraint(equalTo: time.bottomAnchor, constant: 10),
-            map.widthAnchor.constraint(equalToConstant: 92),
-            map.heightAnchor.constraint(equalToConstant: 92),
+            map.widthAnchor.constraint(equalToConstant: 76),
+            map.heightAnchor.constraint(equalToConstant: 76),
 
             banner.centerXAnchor.constraint(equalTo: centerXAnchor),
-            banner.centerYAnchor.constraint(equalTo: centerYAnchor, constant: -110),
+            banner.centerYAnchor.constraint(equalTo: centerYAnchor, constant: -45),
             banner.widthAnchor.constraint(lessThanOrEqualTo: widthAnchor, constant: -24),
             note.centerXAnchor.constraint(equalTo: centerXAnchor),
             note.topAnchor.constraint(equalTo: unit.bottomAnchor, constant: 18),
@@ -102,6 +102,10 @@ final class HUDView: UIView {
         }
     }
 
+    func setControlHint(_ text: String) {
+        if hint.text != text { hint.text = text }
+    }
+
     func setHintVisible(_ visible: Bool) {
         UIView.animate(withDuration: 0.4) { self.hint.alpha = visible ? 1 : 0 }
     }
@@ -114,7 +118,7 @@ struct ResultLine {
     var color: UIColor = UI.amber
 }
 
-/// Dimmed overlay with a title, a few lines and stacked buttons: pause and results.
+/// Landscape pause and results overlay with a fixed action row.
 final class PanelView: UIView {
     init(title: String, titleColor: UIColor = .white, subtitle: String? = nil,
          rows: [(left: String, right: String, highlight: Bool)] = [], money: [ResultLine] = [], buttons: [GlowButton]) {
@@ -122,56 +126,47 @@ final class PanelView: UIView {
         autoresizingMask = [.flexibleWidth, .flexibleHeight]
         backgroundColor = UIColor(red: 0.01, green: 0.02, blue: 0.05, alpha: 0.82)
 
-        let stack = UIStackView()
-        stack.axis = .vertical
-        stack.spacing = 10
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(stack)
+        let head = UI.label(title, UI.font(32, .black), titleColor, align: .center)
+        let detail = subtitle.map { UI.body($0, 13, UI.dim) }
+        detail?.textAlignment = .center
+        let header = UI.stack([head] + (detail.map { [$0] } ?? []), spacing: 3)
+        let standings = UI.stack(rows.map { row in
+            Self.line(row.left, row.right, color: row.highlight ? UI.cyan : .white)
+        }, spacing: 8)
+        let payouts = UI.stack(money.map { Self.line($0.title, $0.value, color: $0.color) }, spacing: 8)
+        let actions = UI.stack(buttons, axis: .horizontal, spacing: 8)
+        actions.distribution = .fillEqually
+        actions.heightAnchor.constraint(equalToConstant: 48).isActive = true
 
-        let head = UI.label(title, UI.font(40, .black), titleColor, align: .center)
-        stack.addArrangedSubview(head)
-        if let subtitle = subtitle {
-            stack.addArrangedSubview(UI.label(subtitle, UI.font(14, .bold), UI.dim, align: .center))
+        let safe = safeAreaLayoutGuide
+        let content: UIView
+        if rows.isEmpty, money.isEmpty {
+            let menu = UI.stack([header, actions], spacing: 18)
+            content = UI.scrollColumn(menu, centered: true)
+        } else {
+            let results = rows.isEmpty ? UI.scrollColumn(payouts)
+                : money.isEmpty ? UI.scrollColumn(standings)
+                : UI.columns(UI.scrollColumn(standings), UI.scrollColumn(payouts))
+            content = UI.stack([header, results, actions], spacing: 12)
         }
-        stack.setCustomSpacing(22, after: stack.arrangedSubviews.last!)
-
-        for row in rows {
-            let line = UIStackView()
-            line.axis = .horizontal
-            let color: UIColor = row.highlight ? UI.cyan : UIColor(white: 1, alpha: 0.82)
-            let left = UI.label(row.left, UI.font(14, .bold), color)
-            let right = UI.label(row.right, UI.digits(15, .semibold), color, align: .right)
-            right.setContentHuggingPriority(.required, for: .horizontal)
-            line.addArrangedSubview(left)
-            line.addArrangedSubview(right)
-            stack.addArrangedSubview(line)
-        }
-        if !rows.isEmpty { stack.setCustomSpacing(22, after: stack.arrangedSubviews.last!) }
-
-        if !money.isEmpty {
-            let card = CardView(raised: true)
-            let lines = money.map { line -> UIView in
-                let left = UI.caps(line.title, 11, UIColor(white: 1, alpha: 0.8))
-                let right = UI.label(line.value, UI.digits(17, .heavy), line.color, align: .right)
-                right.setContentHuggingPriority(.required, for: .horizontal)
-                return UI.stack([left, right], axis: .horizontal, spacing: 8, alignment: .center)
-            }
-            card.fill(with: UI.stack(lines, spacing: 8), inset: 14)
-            stack.addArrangedSubview(card)
-            stack.setCustomSpacing(22, after: card)
-        }
-
-        for button in buttons {
-            stack.addArrangedSubview(button)
-            button.heightAnchor.constraint(equalToConstant: 58).isActive = true
-        }
-
-        // Buttons sit low, under the thumb.
+        addSubview(content)
+        let width = content.widthAnchor.constraint(equalTo: safe.widthAnchor, constant: -32)
+        width.priority = .defaultHigh
         NSLayoutConstraint.activate([
-            stack.centerXAnchor.constraint(equalTo: centerXAnchor),
-            stack.widthAnchor.constraint(equalTo: widthAnchor, multiplier: 0.78),
-            stack.bottomAnchor.constraint(equalTo: safeAreaLayoutGuide.bottomAnchor, constant: -44),
+            content.centerXAnchor.constraint(equalTo: safe.centerXAnchor),
+            content.topAnchor.constraint(equalTo: safe.topAnchor, constant: 16),
+            content.bottomAnchor.constraint(equalTo: safe.bottomAnchor, constant: -16),
+            content.widthAnchor.constraint(lessThanOrEqualToConstant: 740),
+            width,
         ])
+    }
+
+    private static func line(_ left: String, _ right: String, color: UIColor) -> UIView {
+        let label = UI.label(left, UI.font(13, .bold, wide: false), .white)
+        let value = UI.label(right, UI.digits(14, .semibold), color, align: .right)
+        value.numberOfLines = 2
+        value.setContentHuggingPriority(.required, for: .horizontal)
+        return UI.stack([label, value], axis: .horizontal, spacing: 8, alignment: .center)
     }
 
     required init?(coder: NSCoder) { fatalError() }
