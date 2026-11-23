@@ -1,6 +1,10 @@
 import SceneKit
 import simd
 
+enum RacePhysicsDiagnostics {
+    static let enabled = UserDefaults.standard.bool(forKey: "racePhysics")
+}
+
 enum PhysicsCategory {
     static let car: Int = 1 << 0
     static let track: Int = 1 << 1
@@ -234,10 +238,7 @@ final class Car {
 
     // MARK: - Online
 
-    /// A car someone else drives: off the simulation, posed from the network every frame.
-    /// Until the first pose arrives it is hidden and not solid: it would otherwise sit
-    /// invisibly on its grid slot, and a local car driving into it is pushed down through
-    /// the deck, respawned on the same spot and pushed through again.
+    /// A remote car stays hidden and non-colliding until a network pose is available.
     func setRemote() {
         setDemo(true)
         node.isHidden = true
@@ -246,12 +247,7 @@ final class Car {
     }
 
     func applyRemote(_ state: NetCarState, track: TrackPath, dt: Float) {
-        if node.isHidden {
-            // First pose: solid from now on, so the local car bumps into it.
-            node.isHidden = false
-            node.physicsBody?.categoryBitMask = PhysicsCategory.car
-            node.physicsBody?.collisionBitMask = PhysicsCategory.track | PhysicsCategory.car
-        }
+        let firstPose = node.isHidden
         progress = state.progress
         s = Self.wrap(state.progress, track.totalLength)
         worldPosition = state.position
@@ -260,6 +256,11 @@ final class Car {
         }
         node.simdPosition = worldPosition
         node.simdOrientation = state.orientation
+        if firstPose {
+            node.physicsBody?.categoryBitMask = PhysicsCategory.car
+            node.physicsBody?.collisionBitMask = PhysicsCategory.track | PhysicsCategory.car
+            node.isHidden = false
+        }
         speed = simd_length(state.velocity)
         let forward = state.orientation.act(SIMD3<Float>(0, 0, -1))
         worldForward = speed > 6 ? state.velocity / speed : forward
@@ -358,11 +359,11 @@ final class Car {
     }
 
     /// Enforce the road surface after SceneKit advances the wheels and chassis, before rendering.
-    func enforceGround(on track: TrackPath) {
-        guard let body = node.physicsBody, body.type == .dynamic else { return }
+    func enforceGround(on track: TrackPath) -> Float {
+        guard let body = node.physicsBody, body.type == .dynamic else { return 0 }
         let pose = node.presentation
         guard let floor = groundCorrection(at: pose.simdWorldPosition, orientation: pose.simdWorldOrientation,
-                                           track: track) else { return }
+                                           track: track) else { return 0 }
         var transform = pose.simdWorldTransform
         transform.columns.3.y += floor.lift
         let v = body.velocity
@@ -373,6 +374,7 @@ final class Car {
         body.resetTransform()
         body.velocity = SCNVector3(sliding.x, sliding.y, sliding.z)
         body.angularVelocity = spin
+        return floor.lift
     }
 
     /// Reads the simulated pose, then sets wheel forces for the next physics step.
@@ -626,6 +628,10 @@ final class Car {
         }
         let fallen = simd_dot(worldPosition - frame.position, frame.up) < -0.5
         guard fallen || stalled || flippedTime > 1 || stuckTime > 1.5 || wrongWayTime > 2 else { return false }
+        if fallen, RacePhysicsDiagnostics.enabled {
+            let surface = track.ground(at: worldPosition, near: s)
+            print("[race-physics] fallen pos=\(worldPosition) s=\(s) lateral=\(d) deck=\(surface != nil) velocity=\(node.physicsBody?.velocity ?? SCNVector3Zero)")
+        }
         let room = frame.halfWidth - design.halfWidth - 1.5
         teleport(to: s, lateral: max(-room, min(room, d)), track: track)
         return true

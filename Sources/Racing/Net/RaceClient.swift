@@ -328,7 +328,8 @@ final class RaceClient: @unchecked Sendable {
             }
             guard !r.overflow else { return false }
             locked { s in
-                for (id, stamp, state) in states where s.roster.contains(where: { $0.id == id }) {
+                guard s.phase != .lobby else { return }
+                for (id, stamp, state) in states where s.roster.contains(where: { $0.id == id && $0.inRace }) {
                     s.buffers[id, default: SnapshotBuffer()].insert(state, at: stamp)
                 }
             }
@@ -385,15 +386,16 @@ final class RaceClient: @unchecked Sendable {
             let phase = NetPhase(from: &r)
             guard !r.overflow else { return false }
             locked { s in
-                if case .countdown = phase {
-                    // A new grid: old poses must not blend into it.
+                switch phase {
+                case .lobby, .loading:
+                    // Clear old poses before a newly loaded scene can read them.
                     s.buffers.removeAll()
+                    s.outgoing.removeAll()
+                    s.outgoingDirty = false
                     s.finishTimes.removeAll()
                     s.results.removeAll()
-                }
-                if phase == .lobby {
-                    s.finishTimes.removeAll()
-                    s.results.removeAll()
+                case .countdown, .racing, .results:
+                    break
                 }
                 s.phase = phase
             }

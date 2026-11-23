@@ -177,6 +177,8 @@ final class GameScene: NSObject, SCNSceneRendererDelegate, SCNPhysicsContactDele
     private var phase = Phase.countdown(3.6)
     private var raceTime: Float = 0
     private var lastTime: TimeInterval?
+    private var didProbePhysics = false
+    private var groundIssues: [Int: String] = [:]
 
     // --- Shared with the main thread ---
     private let lock = NSLock()
@@ -206,10 +208,7 @@ final class GameScene: NSObject, SCNSceneRendererDelegate, SCNPhysicsContactDele
         self.config = config
         track = TrackPath(definition: config.definition)
         super.init()
-        // The scene is built off the main thread (see GameViewController). SceneKit only
-        // applies background-thread changes reliably inside an explicit transaction; without
-        // one, a physics body could miss the world it was added to, and a car once dropped
-        // straight through a track that had no collision.
+        // Commit the background-built scene and starting grid before the view starts rendering.
         SCNTransaction.begin()
         SCNTransaction.disableActions = true
         buildScene()
@@ -297,6 +296,8 @@ final class GameScene: NSObject, SCNSceneRendererDelegate, SCNPhysicsContactDele
         cameraLead = 0
         lastTick = 0
         phase = autoDrive ? .racing : .countdown(3.6)
+        didProbePhysics = false
+        groundIssues.removeAll()
         publishHUD()
     }
 
@@ -408,7 +409,15 @@ final class GameScene: NSObject, SCNSceneRendererDelegate, SCNPhysicsContactDele
 
     func renderer(_ renderer: SCNSceneRenderer, didSimulatePhysicsAtTime time: TimeInterval) {
         if !autoDrive {
-            for car in cars { car.enforceGround(on: track) }
+            for (i, car) in cars.enumerated() where !remote[i] {
+                let position = RacePhysicsDiagnostics.enabled ? car.node.presentation.simdWorldPosition : .zero
+                let velocity = RacePhysicsDiagnostics.enabled ? car.node.physicsBody?.velocity : nil
+                let lift = car.enforceGround(on: track)
+                if RacePhysicsDiagnostics.enabled {
+                    probeGround(car: car, index: i, position: position, velocity: velocity, lift: lift)
+                }
+            }
+            didProbePhysics = true
         }
         for (car, shadow) in zip(cars, contactShadows) {
             let pose = car.node.presentation
@@ -431,6 +440,35 @@ final class GameScene: NSObject, SCNSceneRendererDelegate, SCNPhysicsContactDele
             shadow.simdPosition = position - frame.up * (height - 0.045)
             shadow.opacity = CGFloat(contact)
         }
+    }
+
+    /// Compare the analytic surface with a deck ray in the live physics world.
+    private func probeGround(car: Car, index: Int, position: SIMD3<Float>, velocity: SCNVector3?, lift: Float) {
+        let surface = track.ground(at: position, near: car.s)
+        let frame = track.frame(at: car.s)
+        let height = simd_dot(position - frame.position, frame.up)
+        let issue: String?
+        if lift > 0.1 {
+            issue = "ground lift"
+        } else if surface == nil, height < 0.3 {
+            issue = "ground lookup missed"
+        } else {
+            issue = nil
+        }
+        let previous = groundIssues[index]
+        groundIssues[index] = issue
+        guard !didProbePhysics || (issue != nil && issue != previous) else { return }
+
+        let deckY = surface.map { position.y - $0.clearance / $0.normal.y } ?? frame.position.y
+        let hit = scene.physicsWorld.rayTestWithSegment(
+            from: SCNVector3(position.x, deckY + 2, position.z),
+            to: SCNVector3(position.x, deckY - 2, position.z),
+            options: [.collisionBitMask: NSNumber(value: PhysicsCategory.track)]
+        ).contains { $0.node.name == "trackMesh" }
+        let id = carIDs.isEmpty ? index : Int(carIDs[index])
+        let mode = config.online.map { $0.client.isHost ? "host" : "guest" } ?? "local"
+        let status = issue ?? "first physics frame"
+        print("[race-physics] \(mode) track=\(track.definition.name) seed=\(track.definition.seed) car=\(id) \(status) rayHit=\(hit) deck=\(surface != nil) pos=\(position) s=\(car.s) lift=\(lift) velocity=\(velocity ?? SCNVector3Zero)")
     }
 
     // MARK: - Online
@@ -464,8 +502,21 @@ final class GameScene: NSObject, SCNSceneRendererDelegate, SCNPhysicsContactDele
         let states = client.remoteStates()
         let finished = client.finishTimes
         for (i, car) in cars.enumerated() where remote[i] {
-            if let state = states[carIDs[i]] { car.applyRemote(state, track: track, dt: dt) }
-            car.finishTime = finished[carIDs[i]]
+            let id = carIDs[i]
+            if let state = states[id] {
+                let firstPose = car.node.isHidden
+                car.applyRemote(state, track: track, dt: dt)
+                if RacePhysicsDiagnostics.enabled, firstPose {
+                    print("[race-physics] remote active car=\(id) pos=\(car.worldPosition)")
+                }
+            } else if !car.node.isHidden {
+                // A missing buffer means the roster or race changed. Packet gaps keep a sampled pose.
+                car.setRemote()
+                if RacePhysicsDiagnostics.enabled {
+                    print("[race-physics] remote inactive car=\(id)")
+                }
+            }
+            car.finishTime = finished[id]
         }
         var mine: [UInt8: NetCarState] = [:]
         for (i, car) in cars.enumerated() where !remote[i] { mine[carIDs[i]] = car.netState }

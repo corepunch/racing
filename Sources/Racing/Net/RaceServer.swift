@@ -218,7 +218,7 @@ final class RaceServer: @unchecked Sendable {
     }
 
     private func snapshot(for clientID: UInt8, _ now: Double) -> Data {
-        let list = cars.filter { $0.state != nil && $0.info.ownerID != clientID }
+        let list = cars.filter { $0.info.inRace && $0.state != nil && $0.info.ownerID != clientID }
         return MsgWriter.message(ServerMsg.snapshot.rawValue) { w in
             w.f64(now)
             w.u8(UInt8(list.count))
@@ -287,6 +287,7 @@ final class RaceServer: @unchecked Sendable {
 
         switch message {
         case .states:
+            guard phase != .lobby else { return }
             // A client's clock estimate can run slightly ahead; never let a pose claim
             // to be from the future.
             let stamp = min(r.f64(), now)
@@ -295,7 +296,8 @@ final class RaceServer: @unchecked Sendable {
                 let carID = r.u8()
                 let state = NetCarState(from: &r)
                 guard !r.overflow, let i = cars.firstIndex(where: { $0.info.id == carID }),
-                      cars[i].info.ownerID == clientID, stamp > cars[i].stateTime else { continue }
+                      cars[i].info.ownerID == clientID, cars[i].info.inRace,
+                      stamp > cars[i].stateTime else { continue }
                 cars[i].state = state
                 cars[i].stateTime = stamp
             }

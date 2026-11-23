@@ -31,6 +31,18 @@ func truth(_ id: UInt8, _ t: Double) -> NetCarState {
     return s
 }
 
+// A large respawn jump should never interpolate through the space between poses.
+do {
+    var before = NetCarState()
+    before.position = SIMD3(70, -2, 0)
+    var after = before
+    after.position = SIMD3(10, 0.6, 0)
+    var buffer = SnapshotBuffer()
+    buffer.insert(before, at: 1)
+    buffer.insert(after, at: 1.04)
+    check(buffer.sample(at: 1.02)?.position == after.position, "large respawn jump resets interpolation")
+}
+
 let t0 = Date()
 let settings = MatchSettings(trackIndex: 2, trackSeed: 42, laps: 3, stake: 100)
 let host = try RaceClient.host(name: "Host", loadout: Data([1, 2, 3]), settings: settings)
@@ -169,14 +181,28 @@ check(clients.allSatisfy { $0.results == results }, "everyone has the same resul
 
 host.returnToLobby()
 check(wait(2) { clients.allSatisfy { $0.phase == .lobby } && !host.cars.contains { !$0.isBot && $0.ready } }, "back to lobby, ready flags reset")
+check(clients.allSatisfy { $0.remoteStates().isEmpty }, "returning to lobby drops the previous grid's poses")
+g1.send(states: [g1Car: truth(g1Car, g1.serverTime)])
+wait(0.2) { false }
+check(clients.allSatisfy { $0.remoteStates().isEmpty }, "late state sends cannot restore poses in the lobby")
+
 
 // A guest arriving mid-race waits for the next one.
 g2.setReady(true); g1.setReady(true)
 wait(2) { host.canStart }
 host.startRace()
-wait(1) { if case .loading = g1.phase { return true } else { return false } }
+check(wait(2) {
+    clients.allSatisfy { if case .loading = $0.phase { return true } else { return false } }
+}, "second race is loading on every client")
+check(clients.allSatisfy { $0.remoteStates().isEmpty }, "new grids have no remote poses before the first send")
+let gridPose = truth(g1Car, g1.serverTime)
+g1.send(states: [g1Car: gridPose])
+check(wait(2) { host.remoteStates()[g1Car] != nil }, "first pose arrives while the second grid is loading")
 for c in clients { c.reportLoaded() }
-wait(2) { if case .countdown = g1.phase { return true } else { return false } }
+check(wait(2) {
+    clients.allSatisfy { if case .countdown = $0.phase { return true } else { return false } }
+}, "second countdown reached")
+check(host.remoteStates()[g1Car] != nil, "valid grid pose survives the loading-to-countdown transition")
 let late = RaceClient.join(host: "127.0.0.1", port: server.port, name: "Late", loadout: Data())
 check(wait(2) { late.cars.count == 5 }, "late joiner gets the roster")
 check(late.cars.first { $0.id == late.myCarIDs.first }?.inRace == false && late.cars.filter(\.inRace).count == 4,
@@ -188,6 +214,8 @@ check(wait(2) { host.cars.count == 4 }, "late joiner left")
 // A guest leaves.
 g1.leave()
 check(wait(2) { host.cars.count == 3 && g2.cars.count == 3 }, "guest leaving drops its car from every roster")
+check(host.remoteStates()[g1Car] == nil && g2.remoteStates()[g1Car] == nil,
+      "departed guest no longer has a sampled pose")
 
 // Info query and Bonjour (Bonjour is best effort headless).
 let browser = LANBrowser()
